@@ -19,3 +19,12 @@
 - Re-verified on 2026-03-12 with node verify.mjs and the develop-web-game Playwright client workflow (run from a temporary .mjs copy because the original skill client hits a Windows ESM loading issue). No console errors were reported.
 
 
+
+- Refined recent-event filtering on 2026-03-12 so late-era safety-net conditions suppress implausible hardship-death logs, and wolf-defense logs stop appearing from the industrial era onward.
+
+
+- Split displayed years from simulation years on 2026-03-12 so era progression timing stays unchanged while the visible calendar accelerates more aggressively in later eras.
+
+
+- Replaced the accelerated display-year counter on 2026-03-12 with an era-aligned historical timeline so on-screen years now track era expectations (for example, industrial around the late 1700s and modern after the early 1900s).
+
