@@ -18,6 +18,18 @@
 - Tightened the layout on 2026-03-12 by preventing the left canvas column from stretching to the event log height and making the recent-events list scroll within its panel.
 - Re-verified on 2026-03-12 with node verify.mjs and the develop-web-game Playwright client workflow (run from a temporary .mjs copy because the original skill client hits a Windows ESM loading issue). No console errors were reported.
 
+- Reworked wolves on 2026-03-12 so they now render with a clearer wolf silhouette, track exposed humans near the settlement edge, and visually connect to victims during attacks.
+- Added wolf-vs-human combat on 2026-03-12 with fleeing civilians, defender retaliation, and explicit pack-bonus damage when multiple wolves attack the same person.
+- Re-verified wolf combat on 2026-03-12 with Playwright screenshots plus render_game_to_text combat counters (`peopleUnderAttack`, `wolvesTargetingHumans`), and re-ran `node verify.mjs` with no console errors.
+
+- Fixed fish placement on 2026-03-12 so fish now spawn, swim, and respawn only inside river/sea water zones instead of drifting onto land.
+- Re-verified fish placement on 2026-03-12 with local Playwright screenshots at start and after fast-forward; fish remained confined to visible water areas.
+- Tightened fish water bounds again on 2026-03-12 by adding inner safety margins to river/sea checks so fish bodies do not appear to overlap the shoreline.
+- Adjusted terrain layering on 2026-03-12 so the river is rendered over the lower ground instead of being buried under the shoreline, fixing the visual impression that fish were swimming under land.
+- Added river-side movement rules on 2026-03-12 so humans now cross the river only by small ferry boats, while boars and wolves stay confined to their home side of the river.
+- Expanded wolf territory on 2026-03-12 so wolves can now spawn on both left and right regions, and added text-state counters for boat riders plus left/right wolf territory checks.
+- Re-verified river crossing rules on 2026-03-12 with Playwright screenshots and text state: active boat crossings were visible, `wolvesLeft` and `wolvesRight` were both non-zero, and `boarsRight` stayed at 0. `node verify.mjs` still reported no console errors.
+
 
 
 - Refined recent-event filtering on 2026-03-12 so late-era safety-net conditions suppress implausible hardship-death logs, and wolf-defense logs stop appearing from the industrial era onward.
