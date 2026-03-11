@@ -50,7 +50,8 @@ const TASK_VISUALS = {
   study: { color: "#bba9ff", accent: "rgba(187, 169, 255, 0.2)" },
   power: { color: "#7fdfff", accent: "rgba(127, 223, 255, 0.24)" },
   guard: { color: "#d8c786", accent: "rgba(216, 199, 134, 0.2)" },
-  drive: { color: "#8bb3d8", accent: "rgba(139, 179, 216, 0.2)" }
+  drive: { color: "#8bb3d8", accent: "rgba(139, 179, 216, 0.2)" },
+  flee: { color: "#ff8d7d", accent: "rgba(255, 141, 125, 0.22)" }
 };
 
 const ROLE_SCHEMES = [
@@ -114,6 +115,17 @@ function lerp(a, b, t) {
 
 function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function distancePointToSegment(point, a, b) {
+  const abX = b.x - a.x;
+  const abY = b.y - a.y;
+  const lengthSq = abX * abX + abY * abY;
+  if (lengthSq === 0) return Math.hypot(point.x - a.x, point.y - a.y);
+  const t = clamp(((point.x - a.x) * abX + (point.y - a.y) * abY) / lengthSq, 0, 1);
+  const projectionX = a.x + abX * t;
+  const projectionY = a.y + abY * t;
+  return Math.hypot(point.x - projectionX, point.y - projectionY);
 }
 
 function randomFrom(rng, min, max) {
@@ -185,6 +197,7 @@ class CivilizationSim {
       rail: [{ x: 560, y: 442 }, { x: 690, y: 442 }, { x: 830, y: 442 }, { x: 915, y: 442 }],
       river: [{ x: 500, y: 70 }, { x: 530, y: 160 }, { x: 515, y: 280 }, { x: 545, y: 390 }, { x: 600, y: 550 }]
     };
+    this.ferryCrossings = this.buildFerryCrossings();
     this.resources = { food: 58, wood: 26, stone: 8, metal: 0, energy: 8, knowledge: 6 };
     this.ecology = { vegetation: 82, wildlife: 76, pollution: 4 };
     this.people = this.createPopulation(24);
@@ -220,6 +233,10 @@ class CivilizationSim {
         warmth: randomFrom(this.rng, 65, 88),
         health: randomFrom(this.rng, 74, 96),
         speedFactor: randomFrom(this.rng, 0.88, 1.14),
+        underAttack: 0,
+        lastDamageReason: "",
+        waypoint: null,
+        boatTrip: null,
         alive: true,
         pulse: this.rng()
       });
@@ -250,8 +267,50 @@ class CivilizationSim {
   }
 
   makeAnimal(species, domestic = false, home = null) {
+    if (species === "fish" && !domestic) {
+      const spawn = this.getFishSpawnState(home?.waterZone || null);
+      return {
+        id: this.nextAnimalId++,
+        species,
+        domestic,
+        x: spawn.x,
+        y: spawn.y,
+        homeX: spawn.homeX,
+        homeY: spawn.homeY,
+        spread: spawn.spread,
+        size: spawn.size,
+        speed: spawn.speed,
+        t: this.rng(),
+        escape: 0,
+        facing: this.rng() > 0.5 ? 1 : -1,
+        attackCooldown: 0,
+        targetPersonId: null,
+        health: 14,
+        woundFlash: 0,
+        waterZone: spawn.waterZone
+      };
+    }
     const zone = home || this.randomZoneForSpecies(species, domestic);
-    return { id: this.nextAnimalId++, species, domestic, x: zone.x + randomFrom(this.rng, -zone.spread, zone.spread), y: zone.y + randomFrom(this.rng, -zone.spread, zone.spread), homeX: zone.x, homeY: zone.y, spread: zone.spread, size: zone.size, speed: zone.speed, t: this.rng(), escape: 0 };
+    return {
+      id: this.nextAnimalId++,
+      species,
+      domestic,
+      x: zone.x + randomFrom(this.rng, -zone.spread, zone.spread),
+      y: zone.y + randomFrom(this.rng, -zone.spread, zone.spread),
+      homeX: zone.x,
+      homeY: zone.y,
+      spread: zone.spread,
+      size: zone.size,
+      speed: zone.speed,
+      t: this.rng(),
+      escape: 0,
+      facing: this.rng() > 0.5 ? 1 : -1,
+      attackCooldown: 0,
+      targetPersonId: null,
+      health: species === "wolf" ? 24 : 14,
+      woundFlash: 0,
+      homeSide: zone.side || this.getLandSide(zone.x, zone.y)
+    };
   }
 
   randomZoneForSpecies(species, domestic = false) {
@@ -259,11 +318,254 @@ class CivilizationSim {
       if (species === "horse") return { x: 205, y: 460, spread: 32, size: 8, speed: 0.024 };
       return { x: 175, y: 470, spread: 28, size: 8, speed: 0.02 };
     }
-    if (species === "fish") return { x: 525, y: 300, spread: 170, size: 6, speed: 0.04 };
+    if (species === "fish") return this.getFishSpawnState();
     if (species === "bird") return { x: 260, y: 180, spread: 230, size: 5, speed: 0.03 };
-    if (species === "wolf") return { x: 760, y: 230, spread: 120, size: 9, speed: 0.028 };
-    if (species === "boar") return { x: 250, y: 290, spread: 120, size: 10, speed: 0.024 };
+    if (species === "wolf") {
+      const zones = [
+        { x: 225, y: 230, spread: 118, size: 9, speed: 0.028, side: "left" },
+        { x: 760, y: 230, spread: 120, size: 9, speed: 0.028, side: "right" }
+      ];
+      return zones[Math.floor(this.rng() * zones.length)];
+    }
+    if (species === "boar") return { x: 250, y: 290, spread: 120, size: 10, speed: 0.024, side: "left" };
     return { x: 230, y: 280, spread: 140, size: 10, speed: 0.022 };
+  }
+
+  getRiverWidthAt(y) {
+    return lerp(32, 52, clamp((y - 70) / 480, 0, 1));
+  }
+
+  getRiverCenterPointAtY(y) {
+    let best = pathPoint(this.routes.river, 0);
+    let bestDistance = Infinity;
+    for (let i = 0; i <= 64; i += 1) {
+      const candidate = pathPoint(this.routes.river, i / 64);
+      const distanceToY = Math.abs(candidate.y - y);
+      if (distanceToY < bestDistance) {
+        bestDistance = distanceToY;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  getRiverBankPointAtY(y, side, inset = 16) {
+    const center = this.getRiverCenterPointAtY(y);
+    const halfWidth = this.getRiverWidthAt(y);
+    return {
+      x: center.x + (side === "left" ? -(halfWidth + inset) : halfWidth + inset),
+      y
+    };
+  }
+
+  buildFerryCrossings() {
+    const centralY = 418;
+    const southY = 500;
+    const centralLeft = this.getRiverBankPointAtY(centralY, "left", 18);
+    const centralRight = this.getRiverBankPointAtY(centralY, "right", 20);
+    const southLeft = this.getRiverBankPointAtY(southY, "left", 20);
+    const southRight = this.getRiverBankPointAtY(southY, "right", 24);
+    return [
+      {
+        key: "central-ferry",
+        left: { x: centralLeft.x, y: centralY },
+        right: { x: centralRight.x, y: centralY + 8 },
+        arcY: centralY - 22
+      },
+      {
+        key: "south-ferry",
+        left: { x: southLeft.x, y: southY },
+        right: { x: southRight.x, y: southY + 12 },
+        arcY: southY - 12
+      }
+    ];
+  }
+
+  getClosestRiverPoint(point) {
+    let best = { x: this.routes.river[0].x, y: this.routes.river[0].y };
+    let bestDistance = Infinity;
+    for (let i = 0; i < this.routes.river.length - 1; i += 1) {
+      const a = this.routes.river[i];
+      const b = this.routes.river[i + 1];
+      const abX = b.x - a.x;
+      const abY = b.y - a.y;
+      const lengthSq = abX * abX + abY * abY;
+      const t = lengthSq === 0 ? 0 : clamp(((point.x - a.x) * abX + (point.y - a.y) * abY) / lengthSq, 0, 1);
+      const candidate = { x: a.x + abX * t, y: a.y + abY * t };
+      const candidateDistance = Math.hypot(point.x - candidate.x, point.y - candidate.y);
+      if (candidateDistance < bestDistance) {
+        bestDistance = candidateDistance;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  isPointInRiver(x, y, inset = 0) {
+    const point = { x, y };
+    let bestDistance = Infinity;
+    for (let i = 0; i < this.routes.river.length - 1; i += 1) {
+      bestDistance = Math.min(bestDistance, distancePointToSegment(point, this.routes.river[i], this.routes.river[i + 1]));
+    }
+    return bestDistance <= Math.max(8, this.getRiverWidthAt(y) - inset);
+  }
+
+  getSeaTopAt(x) {
+    return 462 - clamp((x - 760) / 200, 0, 1) * 32;
+  }
+
+  isPointInSea(x, y, inset = 0) {
+    return x >= 760 + inset && x <= 960 - inset && y >= this.getSeaTopAt(x) + inset && y <= 580 - inset;
+  }
+
+  isPointInWater(x, y, inset = 0) {
+    return this.isPointInRiver(x, y, inset) || this.isPointInSea(x, y, inset);
+  }
+
+  getLandSide(x, y) {
+    if (this.isPointInWater(x, y, 2)) return "water";
+    const center = this.getRiverCenterPointAtY(y);
+    return x < center.x ? "left" : "right";
+  }
+
+  areOppositeRiverSides(a, b) {
+    const sideA = this.getLandSide(a.x, a.y);
+    const sideB = this.getLandSide(b.x, b.y);
+    return sideA !== "water" && sideB !== "water" && sideA !== sideB;
+  }
+
+  getFishSpawnState(preferredZone = null) {
+    const useSea = preferredZone ? preferredZone === "sea" : this.rng() > 0.68;
+    if (useSea) {
+      const x = randomFrom(this.rng, 790, 934);
+      const y = randomFrom(this.rng, this.getSeaTopAt(x) + 22, 562);
+      return { x, y, homeX: x, homeY: y, spread: 34, size: 6, speed: 0.04, waterZone: "sea" };
+    }
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const base = pathPoint(this.routes.river, this.rng());
+      const x = base.x + randomFrom(this.rng, -10, 10);
+      const y = base.y + randomFrom(this.rng, -8, 8);
+      if (this.isPointInRiver(x, y, 10)) {
+        return { x, y, homeX: x, homeY: y, spread: 28, size: 6, speed: 0.04, waterZone: "river" };
+      }
+    }
+    const fallback = pathPoint(this.routes.river, this.rng());
+    return { x: fallback.x, y: fallback.y, homeX: fallback.x, homeY: fallback.y, spread: 24, size: 6, speed: 0.04, waterZone: "river" };
+  }
+
+  constrainFishToWater(animal, x, y) {
+    if (animal.waterZone === "sea") {
+      const nextX = clamp(x, 778, 946);
+      const nextY = clamp(y, this.getSeaTopAt(nextX) + 18, 566);
+      return { x: nextX, y: nextY };
+    }
+    if (this.isPointInRiver(x, y, 10)) return { x, y };
+    const bestPoint = this.getClosestRiverPoint({ x, y });
+    return { x: bestPoint.x, y: bestPoint.y };
+  }
+
+  constrainLandAnimalToHomeSide(animal, x, y) {
+    if (!["wolf", "boar"].includes(animal.species) || !animal.homeSide) return { x, y };
+    if (this.getLandSide(x, y) === animal.homeSide && !this.isPointInRiver(x, y, 6)) return { x, y };
+    const yClamped = clamp(y, 110, 538);
+    const bank = this.getRiverBankPointAtY(yClamped, animal.homeSide, 18);
+    return {
+      x: animal.homeSide === "left" ? Math.min(x, bank.x) : Math.max(x, bank.x),
+      y: yClamped
+    };
+  }
+
+  selectFerryCrossing(fromPoint, toPoint) {
+    let best = this.ferryCrossings[0];
+    let bestScore = Infinity;
+    for (const crossing of this.ferryCrossings) {
+      const fromSide = this.getLandSide(fromPoint.x, fromPoint.y);
+      const start = fromSide === "left" ? crossing.left : crossing.right;
+      const finish = fromSide === "left" ? crossing.right : crossing.left;
+      const score = Math.hypot(fromPoint.x - start.x, fromPoint.y - start.y) + Math.hypot(toPoint.x - finish.x, toPoint.y - finish.y);
+      if (score < bestScore) {
+        bestScore = score;
+        best = crossing;
+      }
+    }
+    return best;
+  }
+
+  getFishingBankSpot(person, fish) {
+    const side = this.getLandSide(person.x, person.y) === "right" ? "right" : "left";
+    return this.getRiverBankPointAtY(clamp(fish.y, 110, 538), side, 22);
+  }
+
+  getDryApproachTarget(person, target) {
+    if (!target || typeof target.x !== "number" || typeof target.y !== "number") return target;
+    if (this.getLandSide(target.x, target.y) !== "water") return target;
+    const side = this.getLandSide(person.x, person.y) === "right" ? "right" : "left";
+    if (person.taskKey === "drive") {
+      const roadAnchor = side === "left" ? this.routes.road[1] : this.routes.road[3];
+      return { x: roadAnchor.x, y: roadAnchor.y };
+    }
+    return this.getRiverBankPointAtY(clamp(target.y, 110, 538), side, target.kind === "bridge" ? 18 : 24);
+  }
+
+  constrainPersonToDryLand(person, x, y) {
+    if (!this.isPointInWater(x, y, 6)) return { x, y };
+    const side = this.getLandSide(person.x, person.y) === "right" ? "right" : "left";
+    if (this.isPointInSea(x, y, 6)) {
+      return { x: side === "right" ? 748 : 732, y: clamp(y, 470, 552) };
+    }
+    return this.getRiverBankPointAtY(clamp(y, 110, 538), side, 18);
+  }
+
+  needsBoatCrossing(person, target) {
+    if (!target || typeof target.x !== "number" || typeof target.y !== "number") return false;
+    if (person.taskKey === "fish" && target.species === "fish") return false;
+    if (person.boatTrip) return false;
+    return this.areOppositeRiverSides(person, target);
+  }
+
+  ensureBoatCrossingPlan(person, target) {
+    const crossing = this.selectFerryCrossing(person, target);
+    const fromSide = this.getLandSide(person.x, person.y);
+    const startDock = fromSide === "left" ? crossing.left : crossing.right;
+    const endDock = fromSide === "left" ? crossing.right : crossing.left;
+    person.waypoint = {
+      kind: "dock",
+      x: startDock.x,
+      y: startDock.y,
+      crossingKey: crossing.key,
+      startDock,
+      endDock,
+      arcY: crossing.arcY
+    };
+    return person.waypoint;
+  }
+
+  startBoatTrip(person, waypoint) {
+    person.boatTrip = {
+      start: { x: waypoint.startDock.x, y: waypoint.startDock.y },
+      end: { x: waypoint.endDock.x, y: waypoint.endDock.y },
+      arcY: waypoint.arcY,
+      progress: 0,
+      originalLabel: person.taskLabel
+    };
+    person.waypoint = null;
+    person.taskLabel = "작은 배를 타고 강을 건너는 중";
+    this.emitInteractionBurst(person.x, person.y, "trade");
+  }
+
+  updateBoatTrip(person, scaledDt) {
+    if (!person.boatTrip) return false;
+    person.boatTrip.progress = clamp(person.boatTrip.progress + scaledDt * 0.08, 0, 1);
+    const p = person.boatTrip.progress;
+    person.x = lerp(person.boatTrip.start.x, person.boatTrip.end.x, p);
+    person.y = lerp(person.boatTrip.start.y, person.boatTrip.end.y, p) - Math.sin(p * Math.PI) * 10 + (person.boatTrip.arcY - Math.min(person.boatTrip.start.y, person.boatTrip.end.y)) * 0.05;
+    if (p >= 1) {
+      person.x = person.boatTrip.end.x;
+      person.y = person.boatTrip.end.y;
+      person.taskLabel = person.boatTrip.originalLabel;
+      person.boatTrip = null;
+    }
+    return true;
   }
 
   initializeSettlement() {
@@ -298,6 +600,19 @@ class CivilizationSim {
       ecology: { ...this.ecology },
       activeDisasters: this.activeDisasters.map((item) => item.type),
       counts: { structures: this.structures.length, animals: this.animals.length, plants: this.plants.length, vehicles: this.vehicles.length, sites: this.constructionSites.length },
+      navigation: {
+        peopleOnBoats: this.getAlivePeople().filter((person) => person.boatTrip).length
+      },
+      combat: {
+        peopleUnderAttack: this.getAlivePeople().filter((person) => person.underAttack > 0.2).length,
+        wolvesTargetingHumans: this.animals.filter((animal) => animal.species === "wolf" && animal.targetPersonId !== null).length
+      },
+      territories: {
+        wolvesLeft: this.animals.filter((animal) => animal.species === "wolf" && animal.homeSide === "left").length,
+        wolvesRight: this.animals.filter((animal) => animal.species === "wolf" && animal.homeSide === "right").length,
+        boarsLeft: this.animals.filter((animal) => animal.species === "boar" && animal.homeSide === "left").length,
+        boarsRight: this.animals.filter((animal) => animal.species === "boar" && animal.homeSide === "right").length
+      },
       animalsBySpecies: this.countBy(this.animals, "species"),
       plantsByType: this.countBy(this.plants, "type"),
       focus: this.getFocusPayload(),
@@ -359,6 +674,70 @@ class CivilizationSim {
 
   countVehicles(type) {
     return this.vehicles.filter((vehicle) => vehicle.type === type).length;
+  }
+
+  findNearestAlivePerson(origin, maxDistance = Infinity, predicate = null) {
+    let best = null;
+    let bestDistance = maxDistance;
+    for (const person of this.getAlivePeople()) {
+      if (predicate && !predicate(person)) continue;
+      const current = dist(origin, person);
+      if (current < bestDistance) {
+        bestDistance = current;
+        best = person;
+      }
+    }
+    return best;
+  }
+
+  findNearestPredator(person, maxDistance = Infinity) {
+    let best = null;
+    let bestDistance = maxDistance;
+    const personSide = this.getLandSide(person.x, person.y);
+    for (const animal of this.animals) {
+      if (animal.species !== "wolf") continue;
+      if (animal.homeSide && animal.homeSide !== personSide) continue;
+      const current = dist(person, animal);
+      if (current < bestDistance) {
+        bestDistance = current;
+        best = animal;
+      }
+    }
+    return best;
+  }
+
+  isPersonExposedToWolves(person) {
+    return person.x < 430 || person.y > 448 || ["farmer", "herder", "hunter", "forager", "wanderer", "lumberjack", "fisher", "guard"].includes(person.roleKey);
+  }
+
+  countNearbyWolvesForPerson(person, radius = 34) {
+    return this.animals.filter((animal) => animal.species === "wolf" && dist(animal, person) <= radius).length;
+  }
+
+  countNearbyWolvesAround(origin, radius = 28) {
+    return this.animals.filter((animal) => animal.species === "wolf" && dist(animal, origin) <= radius).length;
+  }
+
+  countWolvesTargetingPerson(personId, radius = 34, anchor = null) {
+    return this.animals.filter((animal) => animal.species === "wolf" && animal.targetPersonId === personId && (!anchor || dist(animal, anchor) <= radius)).length;
+  }
+
+  driveOffWolf(wolf, reason = "") {
+    wolf.health = 24;
+    wolf.escape = 2.8;
+    wolf.attackCooldown = 1.3;
+    wolf.targetPersonId = null;
+    wolf.woundFlash = 0.7;
+    this.resetAnimal(wolf);
+    if (reason && this.rng() > 0.55) this.log(reason);
+  }
+
+  damageWolf(wolf, amount, reason = "") {
+    if (!wolf || wolf.species !== "wolf") return;
+    wolf.health = clamp(wolf.health - amount, 0, 24);
+    wolf.woundFlash = 0.9;
+    wolf.escape = Math.max(wolf.escape, 1.2);
+    if (wolf.health <= 0) this.driveOffWolf(wolf, reason);
   }
 
   getTaskVisual(taskKey) {
@@ -431,10 +810,11 @@ class CivilizationSim {
     if (this.focusTarget.type === "person") {
       const meta = ROLE_META[entity.roleKey] || ROLE_META.wanderer;
       const targetText = entity.target ? this.describeEntityBrief(entity.target) : "주변을 살피는 중";
+      const threatText = entity.underAttack > 0 ? ` 지금은 ${Math.max(1, this.countNearbyWolvesForPerson(entity, 34))}마리의 늑대가 압박 중입니다.` : "";
       return {
         kicker: `${meta.label} 관찰`,
         title: `${meta.label}이(가) ${entity.taskLabel}`,
-        description: `건강 ${Math.round(entity.health)}%, 에너지 ${Math.round(entity.energy)}%, 배고픔 ${Math.round(entity.hunger)}% 상태입니다. 현재 목표는 ${targetText}입니다.`
+        description: `건강 ${Math.round(entity.health)}%, 에너지 ${Math.round(entity.energy)}%, 배고픔 ${Math.round(entity.hunger)}% 상태입니다. 현재 목표는 ${targetText}입니다.${threatText}`
       };
     }
     if (this.focusTarget.type === "animal") {
@@ -442,7 +822,9 @@ class CivilizationSim {
       return {
         kicker: entity.domestic ? "가축 생태" : "야생 생태",
         title: `${this.labelForAnimal(entity.species)} ${entity.domestic ? "무리" : "개체"}`,
-        description: watchers > 0
+        description: entity.species === "wolf"
+          ? `${watchers > 0 ? `지금 ${watchers}명이 이 늑대를 상대하고 있습니다. ` : ""}늑대는 정착지 가까이 오면 사람을 물고, 여러 마리가 한 사람을 둘러싸면 더 큰 피해를 줍니다.`
+          : watchers > 0
           ? `지금 ${watchers}명이 이 ${this.labelForAnimal(entity.species)}와 직접 상호작용하고 있습니다. ${entity.domestic ? "문명 안쪽에서 사람과 함께 생활합니다." : "야생 영역을 배회하며 사람과 마주칩니다."}`
           : entity.domestic
             ? "사람들이 돌보는 가축으로, 식량과 이동력을 함께 제공합니다."
@@ -563,6 +945,7 @@ class CivilizationSim {
     this.updatePlants(scaledDt);
     this.updateAnimals(scaledDt);
     this.updatePeople(scaledDt);
+    this.updateWolfCombat(scaledDt);
     this.updateVehicles(scaledDt);
     this.updateEconomy(scaledDt);
     this.updateUi();
@@ -732,15 +1115,30 @@ class CivilizationSim {
     const landslide = this.hasDisaster("landslide");
     const rain = this.hasDisaster("rain");
     for (const animal of this.animals) {
+      let movementLerp = 0.03;
       animal.escape = clamp(animal.escape - scaledDt * 0.05, 0, 3);
+      animal.attackCooldown = Math.max(0, animal.attackCooldown - scaledDt);
+      animal.woundFlash = Math.max(0, animal.woundFlash - scaledDt * 0.55);
       animal.t += scaledDt * animal.speed * (animal.escape > 0 ? 2.5 : 1);
       const phaseX = Math.cos(animal.t + animal.id * 0.31);
       const phaseY = Math.sin(animal.t * 0.7 + animal.id * 0.21);
       let targetX = animal.homeX + phaseX * animal.spread;
       let targetY = animal.homeY + phaseY * animal.spread * 0.6;
       if (animal.species === "fish") {
-        targetX = clamp(targetX, 470, 605);
-        targetY = clamp(targetY, 70, 550);
+        if (animal.waterZone === "sea") {
+          targetX = animal.homeX + phaseX * animal.spread;
+          targetY = animal.homeY + phaseY * animal.spread * 0.45;
+        } else {
+          const channelPoint = pathPoint(this.routes.river, (animal.t * 0.12 + animal.id * 0.07) % 1);
+          targetX = channelPoint.x + phaseX * 14;
+          targetY = channelPoint.y + phaseY * 10;
+        }
+        const correctedTarget = this.constrainFishToWater(animal, targetX, targetY);
+        targetX = correctedTarget.x;
+        targetY = correctedTarget.y;
+        const correctedPosition = this.constrainFishToWater(animal, animal.x, animal.y);
+        animal.x = correctedPosition.x;
+        animal.y = correctedPosition.y;
       }
       if (drought && !animal.domestic && animal.species !== "fish") targetX = lerp(targetX, 520, 0.4);
       if (landslide && animal.x > 620) {
@@ -748,14 +1146,83 @@ class CivilizationSim {
         targetY = animal.y;
       }
       if (rain && animal.species === "bird") targetY -= 8;
-      animal.x += (targetX - animal.x) * 0.03;
-      animal.y += (targetY - animal.y) * 0.03;
+      if (animal.species === "wolf") {
+        const victim = this.findNearestAlivePerson(
+          animal,
+          this.eraIndex >= 6 ? 88 : this.flags.agriculture ? 125 : 88,
+          (person) => this.isPersonExposedToWolves(person) && this.getLandSide(person.x, person.y) === animal.homeSide
+        );
+        animal.targetPersonId = victim ? victim.id : null;
+        if (victim) {
+          const aggression = this.flags.agriculture ? 0.76 : 0.48;
+          targetX = lerp(targetX, victim.x, aggression);
+          targetY = lerp(targetY, victim.y, aggression);
+          movementLerp = this.flags.agriculture ? 0.055 : 0.042;
+        } else if (this.flags.agriculture) {
+          targetX = lerp(targetX, 280, 0.18);
+          targetY = lerp(targetY, 380, 0.12);
+        }
+      }
+      if (["wolf", "boar"].includes(animal.species)) {
+        const constrainedTarget = this.constrainLandAnimalToHomeSide(animal, targetX, targetY);
+        targetX = constrainedTarget.x;
+        targetY = constrainedTarget.y;
+        const constrainedCurrent = this.constrainLandAnimalToHomeSide(animal, animal.x, animal.y);
+        animal.x = constrainedCurrent.x;
+        animal.y = constrainedCurrent.y;
+      }
+      animal.facing = targetX >= animal.x ? 1 : -1;
+      animal.x += (targetX - animal.x) * movementLerp;
+      animal.y += (targetY - animal.y) * movementLerp;
     }
     if (this.countAnimals("deer") < 6 && this.ecology.vegetation > 48 && this.rng() < scaledDt * 0.004) this.animals.push(this.makeAnimal("deer"));
     if (this.countAnimals("bird") < 8 && this.rng() < scaledDt * 0.005) this.animals.push(this.makeAnimal("bird"));
     if (this.countAnimals("fish") < 10 && this.rng() < scaledDt * 0.006) this.animals.push(this.makeAnimal("fish"));
     if (this.flags.agriculture && this.countAnimals("sheep", true) < 6 && this.rng() < scaledDt * 0.003) this.animals.push(this.makeAnimal("sheep", true));
     if (this.flags.agriculture && this.countAnimals("cattle", true) < 4 && this.rng() < scaledDt * 0.002) this.animals.push(this.makeAnimal("cattle", true));
+  }
+
+  updateWolfCombat(scaledDt) {
+    const wolves = this.animals.filter((animal) => animal.species === "wolf");
+    for (const wolf of wolves) {
+      const victim = this.getAlivePeople().find((person) => person.id === wolf.targetPersonId)
+        || this.findNearestAlivePerson(wolf, this.eraIndex >= 6 ? 88 : this.flags.agriculture ? 125 : 88, (person) => this.isPersonExposedToWolves(person) && this.getLandSide(person.x, person.y) === wolf.homeSide);
+      if (!victim) {
+        wolf.targetPersonId = null;
+        continue;
+      }
+      wolf.targetPersonId = victim.id;
+      const distanceToVictim = dist(wolf, victim);
+      if (distanceToVictim > 22 || wolf.attackCooldown > 0) continue;
+      const packCount = this.countWolvesTargetingPerson(victim.id, 36, victim);
+      const bonusDamage = Math.max(0, packCount - 1) * 1.4;
+      const biteDamage = 3.1 + bonusDamage;
+      victim.health = clamp(victim.health - biteDamage, 0, 100);
+      victim.underAttack = Math.max(victim.underAttack, 2.1);
+      victim.lastDamageReason = packCount > 1 ? "늑대 무리 습격" : "늑대 습격";
+      wolf.attackCooldown = 1.45 + this.rng() * 0.45;
+      this.emitInteractionBurst(victim.x, victim.y, "flee");
+      if (packCount > 1) this.emitInteractionBurst(wolf.x, wolf.y, "guard");
+
+      const defenders = this.getAlivePeople().filter((person) => person.alive && Math.hypot(person.x - victim.x, person.y - victim.y) < 28 && ["guard", "hunter"].includes(person.roleKey));
+      if (defenders.length > 0) {
+        const retaliation = defenders.length * (2.8 + this.eraIndex * 0.2);
+        this.damageWolf(
+          wolf,
+          retaliation,
+          defenders.length > 1
+            ? "수호자와 사냥꾼들이 협공하며 늑대 무리를 숲 쪽으로 밀어냈습니다."
+            : "무장한 주민이 늑대를 몰아내며 사람들을 지켜냈습니다."
+        );
+        for (const defender of defenders) {
+          this.emitInteractionBurst(defender.x, defender.y, defender.roleKey === "guard" ? "guard" : "hunt");
+        }
+      }
+
+      if (this.rng() > (packCount > 1 ? 0.72 : 0.88)) {
+        this.log(packCount > 1 ? "늑대 무리가 한 사람에게 달려들며 더 큰 상처를 남겼습니다." : "늑대 한 마리가 사람을 물고 달아나며 긴장감이 퍼졌습니다.");
+      }
+    }
   }
   updatePeople(scaledDt) {
     const rain = this.hasDisaster("rain");
@@ -769,12 +1236,13 @@ class CivilizationSim {
       person.hunger = clamp(person.hunger + scaledDt * 0.018, 0, 100);
       person.energy = clamp(person.energy - scaledDt * (snow ? 0.021 : 0.014), 0, 100);
       person.warmth = clamp(person.warmth - scaledDt * (snow ? 0.03 : rain ? 0.018 : 0.008), 0, 100);
+      person.underAttack = clamp(person.underAttack - scaledDt * 0.38, 0, 4);
       person.health = clamp(person.health - (person.hunger > 78 ? scaledDt * 0.03 : 0) - (person.warmth < 34 ? scaledDt * 0.04 : 0) - (disease ? scaledDt * 0.007 : 0), 0, 100);
-      if (!person.target || person.taskTimer === 0) this.assignTask(person);
+      if ((!person.target || person.taskTimer === 0) && !person.boatTrip && !person.waypoint) this.assignTask(person);
       this.moveAndAct(person, scaledDt);
       if (person.health <= 0) {
         person.alive = false;
-        this.log("한 사람이 질병, 굶주림, 혹한, 재해를 이기지 못하고 쓰러졌습니다.");
+        this.log(person.lastDamageReason.includes("늑대") ? "늑대와의 충돌 끝에 한 사람이 쓰러졌습니다." : "한 사람이 질병, 굶주림, 혹한, 재해를 이기지 못하고 쓰러졌습니다.");
       }
     }
   }
@@ -795,6 +1263,12 @@ class CivilizationSim {
   assignTask(person) {
     const shelter = this.findNearestStructure(person, ["hut", "hall", "hospital", "apartment", "tent"]);
     const warmPlace = this.findNearestStructure(person, ["campfire", "windmill", "hall", "hospital", "apartment"]);
+    const nearbyWolf = this.findNearestPredator(person, 46);
+    if (nearbyWolf && !["guard", "hunter"].includes(person.roleKey)) {
+      const refuge = shelter || warmPlace || { x: person.homeX, y: person.homeY };
+      this.setTask(person, "flee", refuge, "늑대에게 쫓겨 급히 도망치는 중", 0.7);
+      return;
+    }
     if ((this.hasDisaster("snow") || this.hasDisaster("rain")) && person.warmth < 45 && warmPlace) {
       this.setTask(person, "warm", warmPlace, "불씨나 건물로 몸을 녹이는 중", 1.2);
       return;
@@ -822,7 +1296,7 @@ class CivilizationSim {
         break;
       }
       case "fisher": {
-        const fish = this.findNearestAnimal(person, ["fish"], false);
+        const fish = this.findNearestAnimal(person, ["fish"], false, (animal) => animal.waterZone === "river");
         if (fish) this.setTask(person, "fish", fish, "강가에서 낚시하는 중", 1.6);
         break;
       }
@@ -906,12 +1380,22 @@ class CivilizationSim {
     person.taskLabel = label;
     person.taskDuration = duration;
     person.taskTimer = 0;
+    person.waypoint = null;
+    person.boatTrip = null;
   }
 
   moveAndAct(person, scaledDt) {
     if (!person.target) return;
+    if (this.updateBoatTrip(person, scaledDt)) return;
     const moveSpeed = (15 + this.eraIndex * 1.5) * person.speedFactor * (this.hasDisaster("snow") ? 0.8 : 1);
-    const target = person.target;
+    let target = person.target;
+    if (person.taskKey === "fish" && person.target.species === "fish") {
+      target = this.getFishingBankSpot(person, person.target);
+    } else if (this.needsBoatCrossing(person, person.target)) {
+      target = person.waypoint || this.ensureBoatCrossingPlan(person, person.target);
+    } else if (person.waypoint?.kind === "dock") {
+      person.waypoint = null;
+    }
     const dx = target.x - person.x;
     const dy = target.y - person.y;
     const distance = Math.hypot(dx, dy);
@@ -919,6 +1403,10 @@ class CivilizationSim {
       person.x += (dx / distance) * moveSpeed * scaledDt;
       person.y += (dy / distance) * moveSpeed * scaledDt;
       if (person.taskKey === "hunt" && target.species) target.escape = 1.4;
+      return;
+    }
+    if (person.waypoint?.kind === "dock") {
+      this.startBoatTrip(person, person.waypoint);
       return;
     }
     person.taskTimer += scaledDt;
@@ -970,11 +1458,16 @@ class CivilizationSim {
         break;
       case "hunt":
         if (person.target && person.target.species) {
-          this.resources.food += 3.4;
-          this.resources.knowledge += 0.15;
-          this.ecology.wildlife -= 0.25;
           this.emitInteractionBurst(person.target.x, person.target.y, "hunt");
-          this.resetAnimal(person.target);
+          if (person.target.species === "wolf") {
+            this.resources.knowledge += 0.22;
+            this.damageWolf(person.target, 12.5 + this.eraIndex * 0.75, "사냥꾼이 늑대를 깊게 찔러 숲 가장자리로 쫓아냈습니다.");
+          } else {
+            this.resources.food += 3.4;
+            this.resources.knowledge += 0.15;
+            this.ecology.wildlife -= 0.25;
+            this.resetAnimal(person.target);
+          }
         }
         break;
       case "fish":
@@ -1044,8 +1537,9 @@ class CivilizationSim {
         this.resources.knowledge += 0.1;
         if (person.target && person.target.species === "wolf") {
           this.emitInteractionBurst(person.target.x, person.target.y, "guard");
-          this.resetAnimal(person.target);
-          if (this.rng() > 0.85) this.log("수호자들이 늑대를 몰아내며 가축 우리를 지켰습니다.");
+          const packPressure = this.countNearbyWolvesAround(person.target, 26);
+          this.damageWolf(person.target, 14 + this.eraIndex + Math.max(0, packPressure - 1) * 1.5, "수호자들이 늑대를 몰아내며 가축 우리와 사람들을 지켰습니다.");
+          if (this.rng() > 0.85) this.log("수호자들이 늑대를 몰아내며 가축 우리와 주민들을 지켜냈습니다.");
         }
         break;
       case "drive":
@@ -1078,12 +1572,23 @@ class CivilizationSim {
       animal.y = animal.homeY + randomFrom(this.rng, -animal.spread, animal.spread);
       return;
     }
+    if (animal.species === "fish") {
+      const spawn = this.getFishSpawnState(animal.waterZone || null);
+      animal.x = spawn.x;
+      animal.y = spawn.y;
+      animal.homeX = spawn.homeX;
+      animal.homeY = spawn.homeY;
+      animal.spread = spawn.spread;
+      animal.waterZone = spawn.waterZone;
+      return;
+    }
     const zone = this.randomZoneForSpecies(animal.species, false);
     animal.x = zone.x + randomFrom(this.rng, -zone.spread, zone.spread);
     animal.y = zone.y + randomFrom(this.rng, -zone.spread, zone.spread);
     animal.homeX = zone.x;
     animal.homeY = zone.y;
     animal.spread = zone.spread;
+    animal.homeSide = zone.side || this.getLandSide(zone.x, zone.y);
   }
 
   findNearestStructure(person, kinds) {
@@ -1114,12 +1619,13 @@ class CivilizationSim {
     return best;
   }
 
-  findNearestAnimal(person, speciesList, domestic = null) {
+  findNearestAnimal(person, speciesList, domestic = null, predicate = null) {
     let best = null;
     let bestDistance = Infinity;
     for (const animal of this.animals) {
       if (!speciesList.includes(animal.species)) continue;
       if (domestic !== null && animal.domestic !== domestic) continue;
+      if (predicate && !predicate(animal)) continue;
       const current = dist(person, animal);
       if (current < bestDistance) {
         bestDistance = current;
@@ -1224,6 +1730,10 @@ class CivilizationSim {
     if (taskCounts.herd) items.push(`목동 ${taskCounts.herd}명이 양, 소, 말과 함께 움직이며 가축 경제를 키웁니다.`);
     if (taskCounts.build) items.push(`건축자 ${taskCounts.build}명이 새 시대의 건물을 올리고 있습니다.`);
     if (taskCounts.power) items.push(`기술자 ${taskCounts.power}명이 공장, 발전소, 태양광 설비를 유지합니다.`);
+    const boatTrips = alive.filter((person) => person.boatTrip).length;
+    if (boatTrips) items.push(`주민 ${boatTrips}명이 작은 배를 타고 강을 건너며 좌우 강변을 연결합니다.`);
+    const peopleUnderAttack = alive.filter((person) => person.underAttack > 0.2).length;
+    if (peopleUnderAttack) items.push(`늑대가 주민 ${peopleUnderAttack}명을 압박 중이며, 여러 마리가 붙으면 한 번 물 때 더 큰 피해를 줍니다.`);
     items.push(`숲과 들판에는 사슴 ${this.countAnimals("deer")}마리, 멧돼지 ${this.countAnimals("boar")}마리, 늑대 ${this.countAnimals("wolf")}마리가 보입니다.`);
     items.push(`강과 바다에는 물고기 ${this.countAnimals("fish")}마리, 하늘에는 새 ${this.countAnimals("bird")}마리가 움직입니다.`);
     return items.slice(0, 5);
@@ -1287,14 +1797,6 @@ class CivilizationSim {
     ctx.beginPath();
     ctx.ellipse(190, 285, 230, 155, -0.2, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#6da8cf";
-    ctx.beginPath();
-    ctx.moveTo(455, -10);
-    ctx.bezierCurveTo(430, 140, 565, 260, 528, 590);
-    ctx.lineTo(612, 590);
-    ctx.bezierCurveTo(640, 280, 510, 150, 548, -10);
-    ctx.closePath();
-    ctx.fill();
     ctx.fillStyle = "#527070";
     ctx.beginPath();
     ctx.moveTo(635, 78);
@@ -1309,14 +1811,8 @@ class CivilizationSim {
     ctx.fill();
     ctx.fillStyle = "#c8a272";
     ctx.fillRect(0, 462, canvas.width, 118);
-    ctx.fillStyle = "#77a8c7";
-    ctx.beginPath();
-    ctx.moveTo(760, 462);
-    ctx.lineTo(960, 430);
-    ctx.lineTo(960, 580);
-    ctx.lineTo(760, 580);
-    ctx.closePath();
-    ctx.fill();
+    this.renderRiverWater();
+    this.renderSeaWater();
     ctx.fillStyle = "rgba(255, 245, 225, 0.32)";
     ctx.font = "12px Georgia";
     ctx.fillText("숲 지대", 112, 166);
@@ -1359,6 +1855,46 @@ class CivilizationSim {
         ctx.stroke();
       }
     }
+  }
+
+  renderRiverWater() {
+    ctx.fillStyle = "#6da8cf";
+    ctx.beginPath();
+    ctx.moveTo(455, -10);
+    ctx.bezierCurveTo(430, 140, 565, 260, 528, 590);
+    ctx.lineTo(612, 590);
+    ctx.bezierCurveTo(640, 280, 510, 150, 548, -10);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(194, 224, 239, 0.45)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(486, -10);
+    ctx.bezierCurveTo(468, 142, 575, 266, 555, 590);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(520, -10);
+    ctx.bezierCurveTo(542, 136, 614, 260, 585, 590);
+    ctx.stroke();
+  }
+
+  renderSeaWater() {
+    ctx.fillStyle = "#77a8c7";
+    ctx.beginPath();
+    ctx.moveTo(760, 462);
+    ctx.lineTo(960, 430);
+    ctx.lineTo(960, 580);
+    ctx.lineTo(760, 580);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(201, 228, 242, 0.42)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(760, 463);
+    ctx.lineTo(960, 431);
+    ctx.stroke();
   }
 
   renderPlants() {
@@ -1672,11 +2208,55 @@ class CivilizationSim {
         ctx.fill();
         ctx.fillRect(a.x + 7, a.y - 4, 5, 4);
       } else if (a.species === "wolf") {
-        ctx.fillStyle = "#8a8e97";
+        const facing = a.facing || 1;
+        ctx.save();
+        ctx.translate(a.x, a.y);
+        ctx.scale(facing, 1);
+        ctx.fillStyle = a.woundFlash > 0 ? "#b57e76" : "#8a8e97";
         ctx.beginPath();
-        ctx.ellipse(a.x, a.y, 12, 5.5, 0, 0, Math.PI * 2);
+        ctx.moveTo(-12, 3);
+        ctx.lineTo(-4, -5);
+        ctx.lineTo(7, -6);
+        ctx.lineTo(13, -1);
+        ctx.lineTo(10, 4);
+        ctx.lineTo(-2, 6);
+        ctx.closePath();
         ctx.fill();
-        ctx.fillRect(a.x + 7, a.y - 4, 5, 4);
+        ctx.beginPath();
+        ctx.moveTo(8, -4);
+        ctx.lineTo(16, -8);
+        ctx.lineTo(16, -1);
+        ctx.lineTo(9, 1);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#7b8088";
+        ctx.beginPath();
+        ctx.moveTo(10, -9);
+        ctx.lineTo(12, -16);
+        ctx.lineTo(14, -8);
+        ctx.closePath();
+        ctx.moveTo(13, -9);
+        ctx.lineTo(16, -15);
+        ctx.lineTo(18, -8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#656a74";
+        ctx.fillRect(-9, 5, 2.2, 8);
+        ctx.fillRect(-2, 5, 2.2, 8);
+        ctx.fillRect(4, 5, 2.2, 8);
+        ctx.fillRect(10, 3, 2.2, 10);
+        ctx.fillStyle = "#6f737c";
+        ctx.beginPath();
+        ctx.moveTo(-12, 1);
+        ctx.lineTo(-19, -4);
+        ctx.lineTo(-15, 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#f4ead7";
+        ctx.beginPath();
+        ctx.arc(17, -4, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       } else if (a.species === "bird") {
         ctx.strokeStyle = "#f3f7ff";
         ctx.lineWidth = 2;
@@ -1784,6 +2364,25 @@ class CivilizationSim {
       ctx.arc(target.x, target.y - 2, 8 + Math.sin(this.weatherPulse * 4 + person.id) * 1.2, 0, Math.PI * 2);
       ctx.stroke();
     }
+    const attackingWolves = this.animals
+      .filter((animal) => animal.species === "wolf" && animal.targetPersonId !== null)
+      .slice(0, 8);
+    for (const wolf of attackingWolves) {
+      const victim = this.getAlivePeople().find((person) => person.id === wolf.targetPersonId);
+      if (!victim || dist(wolf, victim) > 90) continue;
+      ctx.strokeStyle = "rgba(210, 103, 88, 0.36)";
+      ctx.lineWidth = 2.2;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(wolf.x, wolf.y - 2);
+      ctx.lineTo(victim.x, victim.y - 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "rgba(255, 171, 141, 0.76)";
+      ctx.beginPath();
+      ctx.arc(victim.x, victim.y - 2, 10 + Math.sin(this.weatherPulse * 5 + wolf.id) * 1.3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -1855,6 +2454,20 @@ class CivilizationSim {
     for (const person of this.getAlivePeople()) {
       const meta = ROLE_META[person.roleKey] || ROLE_META.wanderer;
       const visual = this.getTaskVisual(person.taskKey);
+      if (person.boatTrip) {
+        ctx.fillStyle = "rgba(34, 26, 18, 0.14)";
+        ctx.beginPath();
+        ctx.ellipse(person.x, person.y + 10, 11, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#7f5436";
+        ctx.beginPath();
+        ctx.moveTo(person.x - 12, person.y + 6);
+        ctx.lineTo(person.x + 12, person.y + 6);
+        ctx.lineTo(person.x + 8, person.y + 12);
+        ctx.lineTo(person.x - 8, person.y + 12);
+        ctx.closePath();
+        ctx.fill();
+      }
       ctx.fillStyle = "rgba(30, 20, 13, 0.16)";
       ctx.beginPath();
       ctx.ellipse(person.x, person.y + 8, 6, 2.6, 0, 0, Math.PI * 2);
@@ -1884,6 +2497,13 @@ class CivilizationSim {
       ctx.beginPath();
       ctx.arc(person.x + 5.5, person.y - 7.5, 2.2, 0, Math.PI * 2);
       ctx.fill();
+      if (person.underAttack > 0.2) {
+        ctx.strokeStyle = `rgba(231, 111, 90, ${0.48 + person.underAttack * 0.08})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(person.x, person.y + 1, 10 + Math.sin(this.weatherPulse * 8 + person.id) * 1.2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       if (person.health < 40) {
         ctx.fillStyle = "rgba(201, 95, 74, 0.85)";
         ctx.beginPath();
