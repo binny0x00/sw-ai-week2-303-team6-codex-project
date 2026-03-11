@@ -132,7 +132,7 @@ const DINOSAUR_COUNTER_ROLE_POWER = {
 };
 
 const DINOSAUR_COUNTER_ANIMAL_POWER = {
-  deer: 0.55,
+  deer: 0,
   boar: 1.35,
   wolf: 1.8,
   sheep: 0.35,
@@ -142,6 +142,13 @@ const DINOSAUR_COUNTER_ANIMAL_POWER = {
 
 function isDinosaurSpecies(species) {
   return Boolean(DINOSAUR_DEFS[species]);
+}
+
+function getAnimalBaseHealth(species) {
+  if (DINOSAUR_DEFS[species]) return DINOSAUR_DEFS[species].maxHealth;
+  if (species === "wolf") return 24;
+  if (species === "boar") return 18;
+  return 14;
 }
 
 const ui = {
@@ -281,7 +288,7 @@ class CivilizationSim {
     this.ferryCrossings = this.buildFerryCrossings();
     this.resources = { food: 58, wood: 26, stone: 8, metal: 0, energy: 8, knowledge: 6 };
     this.ecology = { vegetation: 82, wildlife: 76, pollution: 4 };
-    this.people = this.createPopulation(8, { ageMin: 8, ageMax: 24 });
+    this.people = this.createPopulation(16, { ageMin: 8, ageMax: 24 });
     this.plants = this.createPlants();
     this.animals = this.createAnimals();
     this.structures = [];
@@ -380,6 +387,8 @@ class CivilizationSim {
         facing: this.rng() > 0.5 ? 1 : -1,
         attackCooldown: 0,
         targetPersonId: null,
+        targetAnimalId: null,
+        aggressionTimer: 0,
         health: 14,
         woundFlash: 0,
         waterZone: spawn.waterZone
@@ -403,13 +412,15 @@ class CivilizationSim {
       facing: this.rng() > 0.5 ? 1 : -1,
       attackCooldown: 0,
       targetPersonId: null,
+      targetAnimalId: null,
+      aggressionTimer: 0,
       woundFlash: 0,
       homeSide: zone.side || this.getLandSide(zone.x, zone.y),
       isDinosaur: Boolean(dinosaur),
       diet: dinosaur?.diet || null,
       counterCooldown: 0,
       maxHealth: dinosaur?.maxHealth || null,
-      health: dinosaur ? dinosaur.maxHealth : species === "wolf" ? 24 : 14
+      health: getAnimalBaseHealth(species)
     };
   }
 
@@ -524,6 +535,8 @@ class CivilizationSim {
   }
 
   getLandSide(x, y) {
+    const bridge = this.getBridgeStructure();
+    if (bridge && this.isPointOnBridgeDeck(x, y, 4, bridge)) return x < bridge.x ? "left" : "right";
     if (this.isPointInWater(x, y, 2)) return "water";
     const center = this.getRiverCenterPointAtY(y);
     return x < center.x ? "left" : "right";
@@ -608,7 +621,20 @@ class CivilizationSim {
     return this.getRiverBankPointAtY(clamp(target.y, 110, 538), side, target.kind === "bridge" ? 18 : 24);
   }
 
+  getBridgeStructure() {
+    if (!Array.isArray(this.structures)) return null;
+    return this.structures.find((structure) => structure.kind === "bridge" && this.isStructureOperational(structure)) || null;
+  }
+
+  isPointOnBridgeDeck(x, y, inset = 0, bridge = this.getBridgeStructure()) {
+    if (!bridge) return false;
+    const halfWidth = (bridge.width || 110) * 0.5 - inset;
+    const halfHeight = (bridge.height || 16) * 0.5 + 6 - inset * 0.2;
+    return x >= bridge.x - halfWidth && x <= bridge.x + halfWidth && y >= bridge.y - halfHeight && y <= bridge.y + halfHeight;
+  }
+
   constrainPersonToDryLand(person, x, y) {
+    if (this.isPointOnBridgeDeck(x, y, 2)) return { x, y };
     if (!this.isPointInWater(x, y, 6)) return { x, y };
     const side = this.getLandSide(person.x, person.y) === "right" ? "right" : "left";
     if (this.isPointInSea(x, y, 6)) {
@@ -617,18 +643,164 @@ class CivilizationSim {
     return this.getRiverBankPointAtY(clamp(y, 110, 538), side, 18);
   }
 
+  getTargetReach(target) {
+    if (!target) return 8;
+    if (target.progress !== undefined) {
+      return Math.max(12, Math.max(target.width || target.size || 22, target.height || target.size || 22) * 0.4);
+    }
+    if (target.kind) {
+      return target.kind === "dock" && target.startDock
+        ? 10
+        : Math.max(12, Math.max(target.width || target.size || 20, target.height || target.size || 20) * 0.38);
+    }
+    if (target.roleKey) return 12;
+    if (target.species === "fish") return 16;
+    if (target.species) return 14;
+    return 10;
+  }
+
+  getPersonSteering(person, target, dx, dy) {
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 0.0001) return { x: 0, y: 0 };
+    const desiredX = dx / distance;
+    const desiredY = dy / distance;
+    let steerX = desiredX;
+    let steerY = desiredY;
+
+    const pushAway = (obstacleX, obstacleY, radius, weight = 1) => {
+      const offsetX = obstacleX - person.x;
+      const offsetY = obstacleY - person.y;
+      const current = Math.hypot(offsetX, offsetY);
+      if (current <= 0.0001 || current >= radius) return;
+      const strength = ((radius - current) / radius) * weight;
+      steerX -= (offsetX / current) * strength;
+      steerY -= (offsetY / current) * strength;
+      const tangentSign = desiredX * offsetY - desiredY * offsetX >= 0 ? -1 : 1;
+      steerX += (-offsetY / current) * strength * 0.58 * tangentSign;
+      steerY += (offsetX / current) * strength * 0.58 * tangentSign;
+    };
+
+    const bridgeId = person.waypoint?.kind === "bridge" ? person.waypoint.bridgeId : null;
+    for (const structure of this.getOperationalStructures()) {
+      if (structure === target || structure.id === bridgeId) continue;
+      const radius = Math.max(structure.width || structure.size || 20, structure.height || structure.size || 20) * 0.46 + 14;
+      pushAway(structure.x, structure.y, radius, 1.35);
+    }
+    for (const site of this.constructionSites) {
+      if (site === target) continue;
+      const radius = Math.max(site.width || site.size || 22, site.height || site.size || 22) * 0.42 + 12;
+      pushAway(site.x, site.y, radius, 1.1);
+    }
+    for (const other of this.getAlivePeople()) {
+      if (other.id === person.id || other.boatTrip) continue;
+      pushAway(other.x, other.y, 11, 0.2);
+    }
+
+    const magnitude = Math.hypot(steerX, steerY);
+    if (magnitude < 0.18) {
+      const bias = person.id % 2 === 0 ? 1 : -1;
+      return this.rotateDirection(desiredX, desiredY, bias * 0.58);
+    }
+    return { x: steerX / magnitude, y: steerY / magnitude };
+  }
+
+  rotateDirection(x, y, angle) {
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    return {
+      x: x * cosine - y * sine,
+      y: x * sine + y * cosine
+    };
+  }
+
+  getFallbackPersonStep(person, target, desired, moveDistance) {
+    const bias = person.id % 2 === 0 ? 1 : -1;
+    const candidateDirections = [
+      this.rotateDirection(desired.x, desired.y, bias * 0.52),
+      this.rotateDirection(desired.x, desired.y, -bias * 0.52),
+      this.rotateDirection(desired.x, desired.y, bias * 0.94),
+      this.rotateDirection(desired.x, desired.y, -bias * 0.94),
+      desired
+    ];
+    let bestStep = null;
+    let bestDistance = Infinity;
+    for (const direction of candidateDirections) {
+      let nextX = person.x + direction.x * moveDistance;
+      let nextY = person.y + direction.y * moveDistance;
+      if (!person.waypoint?.kind) {
+        const dryPoint = this.constrainPersonToDryLand(person, nextX, nextY);
+        nextX = dryPoint.x;
+        nextY = dryPoint.y;
+      }
+      const moved = Math.hypot(nextX - person.x, nextY - person.y);
+      if (moved < 0.2) continue;
+      const remaining = Math.hypot(target.x - nextX, target.y - nextY);
+      if (remaining < bestDistance) {
+        bestDistance = remaining;
+        bestStep = { x: nextX, y: nextY };
+      }
+    }
+    return bestStep;
+  }
+
+  needsBridgeCrossing(person, target) {
+    if (!target || typeof target.x !== "number" || typeof target.y !== "number") return false;
+    if (person.boatTrip) return false;
+    if (this.getLandSide(target.x, target.y) === "water") return false;
+    return Boolean(this.getBridgeStructure()) && this.areOppositeRiverSides(person, target);
+  }
+
+  ensureBridgeCrossingPlan(person) {
+    const bridge = this.getBridgeStructure();
+    if (!bridge) return null;
+    const deckInset = Math.min(18, (bridge.width || 110) * 0.22);
+    const leftEntry = { x: bridge.x - (bridge.width || 110) * 0.5 + deckInset, y: bridge.y };
+    const rightEntry = { x: bridge.x + (bridge.width || 110) * 0.5 - deckInset, y: bridge.y };
+    const fromSide = this.getLandSide(person.x, person.y);
+    const start = fromSide === "right" ? rightEntry : leftEntry;
+    const end = fromSide === "right" ? leftEntry : rightEntry;
+    person.waypoint = {
+      kind: "bridge",
+      bridgeId: bridge.id,
+      stage: "approach",
+      x: start.x,
+      y: start.y,
+      start,
+      end
+    };
+    return person.waypoint;
+  }
+
+  advanceBridgeCrossing(person) {
+    if (person.waypoint?.kind !== "bridge") return false;
+    if (person.waypoint.stage === "approach") {
+      person.waypoint = { ...person.waypoint, stage: "cross", x: person.waypoint.end.x, y: person.waypoint.end.y };
+      return true;
+    }
+    person.waypoint = null;
+    return true;
+  }
+
   needsBoatCrossing(person, target) {
     if (!target || typeof target.x !== "number" || typeof target.y !== "number") return false;
     if (person.taskKey === "fish" && target.species === "fish") return false;
     if (person.boatTrip) return false;
+    if (this.needsBridgeCrossing(person, target)) return false;
     return this.areOppositeRiverSides(person, target);
+  }
+
+  getBoatLaneOffset(person) {
+    return ((person.id % 5) - 2) * 7;
   }
 
   ensureBoatCrossingPlan(person, target) {
     const crossing = this.selectFerryCrossing(person, target);
     const fromSide = this.getLandSide(person.x, person.y);
-    const startDock = fromSide === "left" ? crossing.left : crossing.right;
-    const endDock = fromSide === "left" ? crossing.right : crossing.left;
+    const offset = this.getBoatLaneOffset(person);
+    const baseStartDock = fromSide === "left" ? crossing.left : crossing.right;
+    const baseEndDock = fromSide === "left" ? crossing.right : crossing.left;
+    const startDock = { x: baseStartDock.x, y: baseStartDock.y + offset };
+    const endDock = { x: baseEndDock.x, y: baseEndDock.y + offset };
     person.waypoint = {
       kind: "dock",
       x: startDock.x,
@@ -636,7 +808,7 @@ class CivilizationSim {
       crossingKey: crossing.key,
       startDock,
       endDock,
-      arcY: crossing.arcY
+      arcY: crossing.arcY + offset * 0.4
     };
     return person.waypoint;
   }
@@ -907,8 +1079,7 @@ class CivilizationSim {
     if (!person?.alive) return;
     person.alive = false;
     person.health = 0;
-    person.target = null;
-    person.taskTimer = 0;
+    this.clearPersonObjective(person);
     if (details.silent) return;
     if (cause === "dinosaur") {
       this.maybeLogDinosaurIncident(`공룡 습격으로 ${Math.round(person.age)}세 주민 한 명이 쓰러졌습니다.`, 0.7);
@@ -920,6 +1091,10 @@ class CivilizationSim {
     }
     if (cause === "wolf") {
       this.log("늑대와의 충돌 끝에 한 사람이 쓰러졌습니다.");
+      return;
+    }
+    if (cause === "boar") {
+      this.log("성난 멧돼지의 반격으로 주민 한 명이 쓰러졌습니다.");
       return;
     }
     if (cause === "age") {
@@ -974,6 +1149,14 @@ class CivilizationSim {
     return this.vehicles.filter((vehicle) => vehicle.type === type).length;
   }
 
+  clearPersonObjective(person, options = {}) {
+    if (!person) return;
+    person.target = null;
+    person.taskTimer = 0;
+    person.waypoint = null;
+    if (!options.keepBoatTrip) person.boatTrip = null;
+  }
+
   findNearestAlivePerson(origin, maxDistance = Infinity, predicate = null) {
     let best = null;
     let bestDistance = maxDistance;
@@ -1020,6 +1203,38 @@ class CivilizationSim {
     return this.animals.filter((animal) => animal.species === "wolf" && animal.targetPersonId === personId && (!anchor || dist(animal, anchor) <= radius)).length;
   }
 
+  findAnimalById(id) {
+    return this.animals.find((animal) => animal.id === id) || null;
+  }
+
+  getWolfPreyTarget(wolf, maxDistance = Infinity) {
+    const personTarget = this.getAlivePeople().find((person) => person.id === wolf.targetPersonId)
+      || this.findNearestAlivePerson(
+        wolf,
+        maxDistance,
+        (person) => this.isPersonExposedToWolves(person) && this.getLandSide(person.x, person.y) === wolf.homeSide
+      );
+    const animalTarget = this.findAnimalById(wolf.targetAnimalId)
+      || this.findNearestAnimalByPredicate(
+        wolf,
+        (animal) => ["boar", "deer"].includes(animal.species) && this.getLandSide(animal.x, animal.y) === wolf.homeSide,
+        maxDistance
+      );
+    const personDistance = personTarget ? dist(wolf, personTarget) : Infinity;
+    const animalDistance = animalTarget ? dist(wolf, animalTarget) : Infinity;
+    if (personDistance === Infinity && animalDistance === Infinity) return null;
+    return personDistance <= animalDistance ? personTarget : animalTarget;
+  }
+
+  getBoarRetaliationTarget(boar) {
+    if (boar.targetPersonId !== null) return this.getAlivePeople().find((person) => person.id === boar.targetPersonId) || null;
+    if (boar.targetAnimalId !== null) {
+      const animal = this.findAnimalById(boar.targetAnimalId);
+      return animal?.species === "wolf" ? animal : null;
+    }
+    return null;
+  }
+
   driveOffWolf(wolf, reason = "") {
     wolf.health = 24;
     wolf.escape = 2.8;
@@ -1036,6 +1251,33 @@ class CivilizationSim {
     wolf.woundFlash = 0.9;
     wolf.escape = Math.max(wolf.escape, 1.2);
     if (wolf.health <= 0) this.driveOffWolf(wolf, reason);
+  }
+
+  damageBoar(boar, amount, options = {}) {
+    if (!boar || boar.species !== "boar") return false;
+    boar.health = clamp(boar.health - amount, 0, getAnimalBaseHealth("boar"));
+    boar.woundFlash = 0.9;
+    boar.escape = Math.max(boar.escape, 0.4);
+    boar.attackCooldown = Math.max(boar.attackCooldown, 0.35);
+    boar.aggressionTimer = Math.max(boar.aggressionTimer || 0, options.angerDuration || 12);
+    if (options.attacker?.roleKey) {
+      boar.targetPersonId = options.attacker.id;
+      boar.targetAnimalId = null;
+    } else if (options.attacker?.species) {
+      boar.targetAnimalId = options.attacker.id;
+      boar.targetPersonId = null;
+    }
+    if (boar.health > 0) return false;
+    if (options.cause === "human") {
+      this.resources.food += 3.4;
+      this.resources.knowledge += 0.15;
+      this.ecology.wildlife -= 0.25;
+      this.resetAnimal(boar);
+      return true;
+    }
+    this.removeAnimal(boar);
+    this.ecology.wildlife = clamp(this.ecology.wildlife - 1.2, 8, 100);
+    return true;
   }
 
   getTaskVisual(taskKey) {
@@ -1109,7 +1351,12 @@ class CivilizationSim {
       const meta = ROLE_META[entity.roleKey] || ROLE_META.wanderer;
       const targetText = entity.target ? this.describeEntityBrief(entity.target) : "주변을 살피는 중";
       const lifeExpectancy = Math.round(entity.lifeExpectancy || this.estimatePersonLifeExpectancy(entity));
-      const threatText = entity.underAttack > 0 ? ` 지금은 ${Math.max(1, this.countNearbyWolvesForPerson(entity, 34))}마리의 늑대가 압박 중입니다.` : "";
+      let threatText = "";
+      if (entity.underAttack > 0) {
+        if (entity.lastDamageReason.includes("멧돼지")) threatText = " 지금은 성난 멧돼지가 반격 중입니다.";
+        else if (entity.lastDamageReason.includes("늑대")) threatText = ` 지금은 ${Math.max(1, this.countNearbyWolvesForPerson(entity, 34))}마리의 늑대가 압박 중입니다.`;
+        else threatText = " 지금은 야생 개체의 위협을 받고 있습니다.";
+      }
       return {
         kicker: `${meta.label} 관찰`,
         title: `${meta.label}이(가) ${entity.taskLabel}`,
@@ -1133,7 +1380,9 @@ class CivilizationSim {
         kicker: entity.domestic ? "가축 생태" : "야생 생태",
         title: `${this.labelForAnimal(entity.species)} ${entity.domestic ? "무리" : "개체"}`,
         description: entity.species === "wolf"
-          ? `${watchers > 0 ? `지금 ${watchers}명이 이 늑대를 상대하고 있습니다. ` : ""}늑대는 정착지 가까이 오면 사람을 물고, 여러 마리가 한 사람을 둘러싸면 더 큰 피해를 줍니다.`
+          ? `${watchers > 0 ? `지금 ${watchers}명이 이 늑대를 상대하고 있습니다. ` : ""}늑대는 사람뿐 아니라 사슴과 멧돼지도 사냥하며, 여러 마리가 한 사람을 둘러싸면 더 큰 피해를 줍니다.`
+          : entity.species === "boar"
+          ? `${watchers > 0 ? `지금 ${watchers}명이 이 멧돼지와 직접 맞붙고 있습니다. ` : ""}멧돼지는 먼저 공격하지 않지만, 한 번 상처를 입으면 자신을 때린 대상에게 거칠게 반격합니다.`
           : watchers > 0
           ? `지금 ${watchers}명이 이 ${this.labelForAnimal(entity.species)}와 직접 상호작용하고 있습니다. ${entity.domestic ? "문명 안쪽에서 사람과 함께 생활합니다." : "야생 영역을 배회하며 사람과 마주칩니다."}`
           : entity.domestic
@@ -1284,8 +1533,7 @@ class CivilizationSim {
     this.updateAnimals(scaledDt);
     this.updatePeople(scaledDt, yearDelta);
     this.updateWolfCombat(scaledDt);
-    this.updatePeople(scaledDt, yearDelta);
-    this.updateWolfCombat(scaledDt);
+    this.updateBoarCombat(scaledDt);
     this.updateVehicles(scaledDt);
     this.updateEconomy(scaledDt);
     this.updateDemographics(yearDelta);
@@ -1845,6 +2093,7 @@ class CivilizationSim {
       animal.escape = clamp(animal.escape - scaledDt * 0.05, 0, 3);
       animal.attackCooldown = Math.max(0, animal.attackCooldown - scaledDt);
       animal.woundFlash = Math.max(0, animal.woundFlash - scaledDt * 0.55);
+      animal.aggressionTimer = Math.max(0, (animal.aggressionTimer || 0) - scaledDt);
       if (isDinosaurSpecies(animal.species)) {
         this.updateDinosaur(animal, scaledDt, { drought, landslide });
         continue;
@@ -1877,20 +2126,30 @@ class CivilizationSim {
       }
       if (rain && animal.species === "bird") targetY -= 8;
       if (animal.species === "wolf") {
-        const victim = this.findNearestAlivePerson(
-          animal,
-          this.eraIndex >= 6 ? 88 : this.flags.agriculture ? 125 : 88,
-          (person) => this.isPersonExposedToWolves(person) && this.getLandSide(person.x, person.y) === animal.homeSide
-        );
-        animal.targetPersonId = victim ? victim.id : null;
+        const victim = this.getWolfPreyTarget(animal, this.eraIndex >= 6 ? 88 : this.flags.agriculture ? 125 : 88);
+        animal.targetPersonId = victim?.roleKey ? victim.id : null;
+        animal.targetAnimalId = victim?.species ? victim.id : null;
         if (victim) {
           const aggression = this.flags.agriculture ? 0.76 : 0.48;
           targetX = lerp(targetX, victim.x, aggression);
           targetY = lerp(targetY, victim.y, aggression);
-          movementLerp = this.flags.agriculture ? 0.055 : 0.042;
+          movementLerp = victim.roleKey
+            ? (this.flags.agriculture ? 0.055 : 0.042)
+            : 0.05;
         } else if (this.flags.agriculture) {
           targetX = lerp(targetX, 280, 0.18);
           targetY = lerp(targetY, 380, 0.12);
+        }
+      }
+      if (animal.species === "boar") {
+        const retaliationTarget = this.getBoarRetaliationTarget(animal);
+        if (retaliationTarget && animal.aggressionTimer > 0) {
+          targetX = lerp(targetX, retaliationTarget.x, 0.72);
+          targetY = lerp(targetY, retaliationTarget.y, 0.72);
+          movementLerp = 0.05;
+        } else {
+          animal.targetPersonId = null;
+          animal.targetAnimalId = null;
         }
       }
       if (["wolf", "boar"].includes(animal.species)) {
@@ -2081,42 +2340,79 @@ class CivilizationSim {
   updateWolfCombat(scaledDt) {
     const wolves = this.animals.filter((animal) => animal.species === "wolf");
     for (const wolf of wolves) {
-      const victim = this.getAlivePeople().find((person) => person.id === wolf.targetPersonId)
-        || this.findNearestAlivePerson(wolf, this.eraIndex >= 6 ? 88 : this.flags.agriculture ? 125 : 88, (person) => this.isPersonExposedToWolves(person) && this.getLandSide(person.x, person.y) === wolf.homeSide);
+      const victim = this.getWolfPreyTarget(wolf, this.eraIndex >= 6 ? 88 : this.flags.agriculture ? 125 : 88);
       if (!victim) {
         wolf.targetPersonId = null;
+        wolf.targetAnimalId = null;
         continue;
       }
-      wolf.targetPersonId = victim.id;
+      wolf.targetPersonId = victim.roleKey ? victim.id : null;
+      wolf.targetAnimalId = victim.species ? victim.id : null;
       const distanceToVictim = dist(wolf, victim);
       if (distanceToVictim > 22 || wolf.attackCooldown > 0) continue;
-      const packCount = this.countWolvesTargetingPerson(victim.id, 36, victim);
-      const bonusDamage = Math.max(0, packCount - 1) * 1.4;
-      const biteDamage = 3.1 + bonusDamage;
-      victim.health = clamp(victim.health - biteDamage, 0, 100);
-      victim.underAttack = Math.max(victim.underAttack, 2.1);
-      victim.lastDamageReason = packCount > 1 ? "늑대 무리 습격" : "늑대 습격";
-      wolf.attackCooldown = 1.45 + this.rng() * 0.45;
-      this.emitInteractionBurst(victim.x, victim.y, "flee");
-      if (packCount > 1) this.emitInteractionBurst(wolf.x, wolf.y, "guard");
+      wolf.attackCooldown = 1.25 + this.rng() * 0.45;
+      if (victim.roleKey) {
+        const packCount = this.countWolvesTargetingPerson(victim.id, 36, victim);
+        const bonusDamage = Math.max(0, packCount - 1) * 1.4;
+        const biteDamage = 3.1 + bonusDamage;
+        victim.health = clamp(victim.health - biteDamage, 0, 100);
+        victim.underAttack = Math.max(victim.underAttack, 2.1);
+        victim.lastDamageReason = packCount > 1 ? "늑대 무리 습격" : "늑대 습격";
+        this.emitInteractionBurst(victim.x, victim.y, "flee");
+        if (packCount > 1) this.emitInteractionBurst(wolf.x, wolf.y, "guard");
 
-      const defenders = this.getAlivePeople().filter((person) => person.alive && Math.hypot(person.x - victim.x, person.y - victim.y) < 28 && ["guard", "hunter"].includes(person.roleKey));
-      if (defenders.length > 0) {
-        const retaliation = defenders.length * (2.8 + this.eraIndex * 0.2);
-        this.damageWolf(
-          wolf,
-          retaliation,
-          defenders.length > 1
-            ? "수호자와 사냥꾼들이 협공하며 늑대 무리를 숲 쪽으로 밀어냈습니다."
-            : "무장한 주민이 늑대를 몰아내며 사람들을 지켜냈습니다."
-        );
-        for (const defender of defenders) {
-          this.emitInteractionBurst(defender.x, defender.y, defender.roleKey === "guard" ? "guard" : "hunt");
+        const defenders = this.getAlivePeople().filter((person) => person.alive && Math.hypot(person.x - victim.x, person.y - victim.y) < 28 && ["guard", "hunter"].includes(person.roleKey));
+        if (defenders.length > 0) {
+          const retaliation = defenders.length * (2.8 + this.eraIndex * 0.2);
+          this.damageWolf(
+            wolf,
+            retaliation,
+            defenders.length > 1
+              ? "수호자와 사냥꾼들이 협공하며 늑대 무리를 숲 쪽으로 밀어냈습니다."
+              : "무장한 주민이 늑대를 몰아내며 사람들을 지켜냈습니다."
+          );
+          for (const defender of defenders) {
+            this.emitInteractionBurst(defender.x, defender.y, defender.roleKey === "guard" ? "guard" : "hunt");
+          }
         }
+        if (this.rng() > (packCount > 1 ? 0.72 : 0.88)) {
+          this.log(packCount > 1 ? "늑대 무리가 한 사람에게 달려들며 더 큰 상처를 남겼습니다." : "늑대 한 마리가 사람을 물고 달아나며 긴장감이 퍼졌습니다.");
+        }
+        continue;
       }
+      this.emitInteractionBurst(victim.x, victim.y, "hunt");
+      if (victim.species === "boar") {
+        this.damageBoar(victim, 5.6 + this.rng() * 1.6, { attacker: wolf, cause: "wolf", angerDuration: 16 });
+      } else {
+        this.removeAnimal(victim);
+        this.ecology.wildlife = clamp(this.ecology.wildlife - 0.9, 8, 100);
+        if (this.rng() > 0.82) this.log("늑대가 사슴을 덮치며 들판의 긴장감이 높아졌습니다.");
+      }
+    }
+  }
 
-      if (this.rng() > (packCount > 1 ? 0.72 : 0.88)) {
-        this.log(packCount > 1 ? "늑대 무리가 한 사람에게 달려들며 더 큰 상처를 남겼습니다." : "늑대 한 마리가 사람을 물고 달아나며 긴장감이 퍼졌습니다.");
+  updateBoarCombat(scaledDt) {
+    const boars = this.animals.filter((animal) => animal.species === "boar" && animal.aggressionTimer > 0);
+    for (const boar of boars) {
+      const target = this.getBoarRetaliationTarget(boar);
+      if (!target) {
+        boar.targetPersonId = null;
+        boar.targetAnimalId = null;
+        continue;
+      }
+      if (dist(boar, target) > 20 || boar.attackCooldown > 0) continue;
+      boar.attackCooldown = 1.1 + this.rng() * 0.35;
+      this.emitInteractionBurst(boar.x, boar.y, "guard");
+      if (target.roleKey) {
+        target.health = clamp(target.health - (4.6 + this.rng() * 1.3), 0, 100);
+        target.underAttack = Math.max(target.underAttack, 1.5);
+        target.lastDamageReason = "멧돼지 반격";
+        this.emitInteractionBurst(target.x, target.y, "flee");
+        if (this.rng() > 0.84) this.log("상처 입은 멧돼지가 사람에게 반격하며 들판이 소란해졌습니다.");
+        continue;
+      }
+      if (target.species === "wolf") {
+        this.damageWolf(target, 7.2 + this.rng() * 1.8, "상처 입은 멧돼지가 들이받아 늑대를 밀어냈습니다.");
       }
     }
   }
@@ -2156,7 +2452,11 @@ class CivilizationSim {
       if ((!person.target || person.taskTimer === 0) && !person.boatTrip && !person.waypoint) this.assignTask(person);
       this.moveAndAct(person, scaledDt);
       if (person.health <= 0) {
-        const deathCause = person.lastDamageReason.includes("늑대") ? "wolf" : "hardship";
+        const deathCause = person.lastDamageReason.includes("늑대")
+          ? "wolf"
+          : person.lastDamageReason.includes("멧돼지")
+            ? "boar"
+            : "hardship";
         this.recordDeath(person, deathCause, { causes });
       }
     }
@@ -2169,8 +2469,7 @@ class CivilizationSim {
       const nextRole = pickWeighted(scheme, i + (initial ? 0 : this.eraIndex));
       if (alive[i].roleKey !== nextRole) {
         alive[i].roleKey = nextRole;
-        alive[i].taskTimer = 0;
-        alive[i].target = null;
+        this.clearPersonObjective(alive[i], { keepBoatTrip: true });
       }
     }
   }
@@ -2318,24 +2617,55 @@ class CivilizationSim {
   }
 
   moveAndAct(person, scaledDt) {
-    if (!person.target) return;
     if (this.updateBoatTrip(person, scaledDt)) return;
+    if (!person.target) {
+      person.waypoint = null;
+      return;
+    }
     const moveSpeed = (15 + this.eraIndex * 1.5) * person.speedFactor * (this.hasDisaster("snow") ? 0.8 : 1);
     let target = person.target;
-    if (person.taskKey === "fish" && person.target.species === "fish") {
+    if (person.waypoint?.kind === "bridge") {
+      target = person.waypoint;
+    } else if (person.taskKey === "fish" && person.target.species === "fish") {
       target = this.getFishingBankSpot(person, person.target);
+    } else if (this.needsBridgeCrossing(person, person.target)) {
+      target = person.waypoint || this.ensureBridgeCrossingPlan(person);
     } else if (this.needsBoatCrossing(person, person.target)) {
       target = person.waypoint || this.ensureBoatCrossingPlan(person, person.target);
-    } else if (person.waypoint?.kind === "dock") {
+    } else if (person.waypoint?.kind === "dock" || person.waypoint?.kind === "bridge") {
       person.waypoint = null;
     }
     const dx = target.x - person.x;
     const dy = target.y - person.y;
     const distance = Math.hypot(dx, dy);
-    if (distance > 8) {
-      person.x += (dx / distance) * moveSpeed * scaledDt;
-      person.y += (dy / distance) * moveSpeed * scaledDt;
+    const reach = this.getTargetReach(target);
+    if (distance > reach) {
+      const desired = { x: dx / distance, y: dy / distance };
+      const stepDistance = moveSpeed * scaledDt;
+      const steering = this.getPersonSteering(person, target, dx, dy);
+      let nextX = person.x + steering.x * stepDistance;
+      let nextY = person.y + steering.y * stepDistance;
+      if (!person.waypoint?.kind) {
+        const dryPoint = this.constrainPersonToDryLand(person, nextX, nextY);
+        nextX = dryPoint.x;
+        nextY = dryPoint.y;
+      }
+      const moved = Math.hypot(nextX - person.x, nextY - person.y);
+      const nextDistance = Math.hypot(target.x - nextX, target.y - nextY);
+      if (moved < 0.2 || nextDistance > distance - 0.08) {
+        const fallbackStep = this.getFallbackPersonStep(person, target, desired, stepDistance);
+        if (fallbackStep && (moved < 0.2 || Math.hypot(target.x - fallbackStep.x, target.y - fallbackStep.y) < nextDistance - 0.04)) {
+          nextX = fallbackStep.x;
+          nextY = fallbackStep.y;
+        }
+      }
+      person.x = nextX;
+      person.y = nextY;
       if (person.taskKey === "hunt" && target.species) target.escape = 1.4;
+      return;
+    }
+    if (person.waypoint?.kind === "bridge") {
+      this.advanceBridgeCrossing(person);
       return;
     }
     if (person.waypoint?.kind === "dock") {
@@ -2345,8 +2675,7 @@ class CivilizationSim {
     person.taskTimer += scaledDt;
     if (person.taskTimer >= person.taskDuration) {
       this.resolveTask(person);
-      person.taskTimer = 0;
-      person.target = null;
+      this.clearPersonObjective(person);
     }
   }
 
@@ -2400,6 +2729,9 @@ class CivilizationSim {
           if (person.target.species === "wolf") {
             this.resources.knowledge += 0.22;
             this.damageWolf(person.target, 12.5 + this.eraIndex * 0.75, "사냥꾼이 늑대를 깊게 찔러 숲 가장자리로 쫓아냈습니다.");
+          } else if (person.target.species === "boar") {
+            const killed = this.damageBoar(person.target, 8.8 + this.eraIndex * 0.7, { attacker: person, cause: "human", angerDuration: 18 });
+            this.resources.knowledge += killed ? 0.24 : 0.14;
           } else {
             this.resources.food += 3.4;
             this.resources.knowledge += 0.15;
@@ -2511,6 +2843,12 @@ class CivilizationSim {
   }
 
   resetAnimal(animal) {
+    animal.targetPersonId = null;
+    animal.targetAnimalId = null;
+    animal.aggressionTimer = 0;
+    animal.attackCooldown = 0;
+    animal.woundFlash = 0;
+    animal.health = getAnimalBaseHealth(animal.species);
     if (animal.domestic) {
       animal.x = animal.homeX + randomFrom(this.rng, -animal.spread, animal.spread);
       animal.y = animal.homeY + randomFrom(this.rng, -animal.spread, animal.spread);
@@ -2538,8 +2876,7 @@ class CivilizationSim {
   clearTargetsForEntity(entity) {
     for (const person of this.getAlivePeople()) {
       if (person.target === entity) {
-        person.target = null;
-        person.taskTimer = 0;
+        this.clearPersonObjective(person, { keepBoatTrip: true });
       }
     }
   }
