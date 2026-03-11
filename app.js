@@ -1,6 +1,7 @@
 ﻿const canvas = document.getElementById("worldCanvas");
 const ctx = canvas.getContext("2d");
 
+
 const ERA_DEFS = [
   { name: "원시 시대", threshold: 0, yearGate: 0, summary: "채집과 사냥으로 생존을 이어갑니다.", lifeExpectancy: 23, birthRate: 0.018 },
   { name: "불의 시대", threshold: 22, yearGate: 12, summary: "공동 불씨가 밤의 활동을 가능하게 합니다.", lifeExpectancy: 27, birthRate: 0.019 },
@@ -11,6 +12,17 @@ const ERA_DEFS = [
   { name: "산업 혁명 시대", threshold: 195, yearGate: 185, summary: "공장과 철도가 세상을 빠르게 연결합니다.", lifeExpectancy: 65, birthRate: 0.0145 },
   { name: "현대 시대", threshold: 245, yearGate: 260, summary: "전력, 병원, 학교, 도로와 네트워크가 완성됩니다.", lifeExpectancy: 73, birthRate: 0.0125 }
 ];
+const DISPLAY_YEAR_RANGES = [
+  { start: -8000, end: -4500 },
+  { start: -4500, end: -2500 },
+  { start: -2500, end: -1200 },
+  { start: -1200, end: 350 },
+  { start: 350, end: 900 },
+  { start: 900, end: 1760 },
+  { start: 1760, end: 1910 },
+  { start: 1910, end: 2220 }
+];
+
 
 const ROLE_META = {
   forager: { label: "채집자", color: "#3f2d21" },
@@ -172,6 +184,7 @@ class CivilizationSim {
     this.timeYears = 0;
     this.weatherPulse = 0;
     this.eraIndex = 0;
+    this.displayYears = this.getDisplayYearValue();
     this.roleRefreshCooldown = 0;
     this.logs = [];
     this.focusTarget = null;
@@ -303,7 +316,9 @@ class CivilizationSim {
       running: this.running,
       started: this.started,
       speed: this.speed,
-      year: Number(this.timeYears.toFixed(1)),
+      year: Math.round(this.displayYears),
+      yearLabel: this.getDisplayYearLabel(),
+      simulationYear: Number(this.timeYears.toFixed(1)),
       era: this.getEra().name,
       civilizationScore: Number(this.computeCivilizationScore().toFixed(1)),
       population: this.getAlivePeople().length,
@@ -339,6 +354,22 @@ class CivilizationSim {
 
   getEra() {
     return ERA_DEFS[this.eraIndex];
+  }
+
+  getDisplayYearValue() {
+    const nextGate = this.eraIndex < ERA_DEFS.length - 1 ? ERA_DEFS[this.eraIndex + 1].yearGate : null;
+    const range = DISPLAY_YEAR_RANGES[this.eraIndex] || DISPLAY_YEAR_RANGES[DISPLAY_YEAR_RANGES.length - 1];
+    const currentGate = this.getEra().yearGate;
+    if (nextGate === null) return range.start + (this.timeYears - currentGate) * 2.4;
+    const span = Math.max(1, nextGate - currentGate);
+    const progress = clamp((this.timeYears - currentGate) / span, 0, 1);
+    return lerp(range.start, range.end, progress);
+  }
+
+  getDisplayYearLabel() {
+    const year = Math.round(this.displayYears);
+    if (year < 1) return `기원전 ${Math.abs(year) + 1}년`;
+    return `${year}년`;
   }
 
   getAlivePeople() {
@@ -439,7 +470,7 @@ class CivilizationSim {
     return average(alive.map((person) => this.estimatePersonLifeExpectancy(person, demographic)));
   }
 
-  recordDeath(person, cause = "hardship") {
+  recordDeath(person, cause = "hardship", details = {}) {
     if (!person?.alive) return;
     person.alive = false;
     person.health = 0;
@@ -453,7 +484,7 @@ class CivilizationSim {
       this.log("흉년과 질병, 과밀이 겹치며 취약한 주민 한 명이 더 버티지 못했습니다.");
       return;
     }
-    this.log("한 사람이 질병, 굶주림, 혹한, 재해를 이기지 못하고 쓰러졌습니다.");
+    this.logEvent("hardshipDeath", "한 사람이 질병, 굶주림, 혹한, 재해를 이기지 못하고 쓰러졌습니다.", details);
   }
 
   countBy(list, key) {
@@ -641,9 +672,31 @@ class CivilizationSim {
   }
 
   log(message) {
-    this.logs.unshift(`${this.timeYears.toFixed(1)}년: ${message}`);
+    this.logs.unshift(`${this.getDisplayYearLabel()}: ${message}`);
     this.logs = this.logs.slice(0, 12);
     this.updateUi();
+  }
+
+  shouldLogEvent(eventKey, details = {}) {
+    switch (eventKey) {
+      case "hardshipDeath": {
+        const causes = details.causes || {};
+        const hasSevereDisaster = this.activeDisasters.some((disaster) => ["disease", "landslide", "drought"].includes(disaster.type));
+        const hasModernSafetyNet = this.eraIndex >= 6 && (this.countStructures("hospital") > 0 || this.countStructures("apartment") > 0);
+        if (!hasModernSafetyNet) return true;
+        if (causes.disease || hasSevereDisaster) return true;
+        return Boolean(causes.disaster && this.activeDisasters.length > 0);
+      }
+      case "wolfDefense":
+        return this.eraIndex < 6;
+      default:
+        return true;
+    }
+  }
+
+  logEvent(eventKey, message, details = {}) {
+    if (!this.shouldLogEvent(eventKey, details)) return;
+    this.log(message);
   }
 
   addStructure(kind, x, y, extra = {}) {
@@ -678,6 +731,7 @@ class CivilizationSim {
     const scaledDt = dt * this.speed;
     const yearDelta = scaledDt * 0.42;
     this.timeYears += yearDelta;
+    this.displayYears = this.getDisplayYearValue();
     this.weatherPulse += scaledDt;
     this.roleRefreshCooldown -= scaledDt;
     this.updateEra();
@@ -893,6 +947,12 @@ class CivilizationSim {
     }
     for (const person of this.getAlivePeople()) {
       const resilience = 2 - person.resilience;
+      const causes = {
+        hunger: person.hunger > 78,
+        cold: person.warmth < 34,
+        disease,
+        disaster: snow || rain || this.activeDisasters.length > 0
+      };
       person.age += yearDelta;
       person.hunger = clamp(person.hunger + scaledDt * 0.018 * resilience, 0, 100);
       person.energy = clamp(person.energy - scaledDt * (snow ? 0.021 : 0.014) * resilience, 0, 100);
@@ -910,7 +970,7 @@ class CivilizationSim {
       if (!person.target || person.taskTimer === 0) this.assignTask(person);
       this.moveAndAct(person, scaledDt);
       if (person.health <= 0) {
-        this.recordDeath(person, "hardship");
+        this.recordDeath(person, "hardship", { causes });
       }
     }
   }
@@ -1181,7 +1241,7 @@ class CivilizationSim {
         if (person.target && person.target.species === "wolf") {
           this.emitInteractionBurst(person.target.x, person.target.y, "guard");
           this.resetAnimal(person.target);
-          if (this.rng() > 0.85) this.log("수호자들이 늑대를 몰아내며 가축 우리를 지켰습니다.");
+          if (this.rng() > 0.85) this.logEvent("wolfDefense", "수호자들이 늑대를 몰아내며 가축 우리를 지켰습니다.");
         }
         break;
       case "drive":
@@ -2112,7 +2172,7 @@ class CivilizationSim {
     ctx.fillRect(14, 14, 300, 100);
     ctx.fillStyle = "#f5ead4";
     ctx.font = "13px Georgia";
-    ctx.fillText(`${this.timeYears.toFixed(1)}년  |  ${this.getEra().name}  |  배속 ${this.speed}x`, 26, 38);
+    ctx.fillText(`${this.getDisplayYearLabel()}  |  ${this.getEra().name}  |  배속 ${this.speed}x`, 26, 38);
     ctx.fillText(`인구 ${this.getAlivePeople().length}  |  식량 ${Math.round(this.resources.food)}  |  에너지 ${Math.round(this.resources.energy)}`, 26, 60);
     ctx.fillText(`야생동물 ${Math.round(this.ecology.wildlife)}%  |  식생 ${Math.round(this.ecology.vegetation)}%  |  오염 ${Math.round(this.ecology.pollution)}%`, 26, 82);
     ctx.fillText(`건물 ${this.structures.length}  |  차량 ${this.vehicles.length}  |  지식 ${Math.round(this.resources.knowledge)}`, 26, 104);
@@ -2176,3 +2236,5 @@ window.addEventListener("keydown", async (event) => {
 sim.updateUi();
 sim.render();
 requestAnimationFrame(frameLoop);
+
+
