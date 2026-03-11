@@ -72,6 +72,61 @@ const disasterConfigs = {
   disease: { label: "질병", duration: 16, color: "rgba(167, 83, 67, 0.18)" }
 };
 
+const DINOSAUR_DEFS = {
+  triceratops: {
+    label: "트리케라톱스",
+    diet: "herbivore",
+    zone: { x: 748, y: 246, spread: 112, size: 26, speed: 0.017 },
+    interactionRadius: 30,
+    maxHealth: 180,
+    counterRadius: 74,
+    counterThreshold: 8.2,
+    rewardFood: 8.5
+  },
+  tyrannosaurus: {
+    label: "티라노사우루스",
+    diet: "carnivore",
+    zone: { x: 782, y: 220, spread: 136, size: 28, speed: 0.021 },
+    interactionRadius: 34,
+    maxHealth: 165,
+    counterRadius: 78,
+    counterThreshold: 6.9,
+    rewardFood: 6.5
+  }
+};
+
+const DINOSAUR_COUNTER_ROLE_POWER = {
+  wanderer: 0.65,
+  forager: 0.7,
+  hunter: 2.8,
+  fisher: 0.95,
+  lumberjack: 1.35,
+  farmer: 0.85,
+  herder: 1.2,
+  builder: 1.25,
+  miner: 1.65,
+  artisan: 0.8,
+  trader: 0.7,
+  scholar: 0.55,
+  engineer: 1.1,
+  medic: 0.75,
+  guard: 3.35,
+  driver: 0.95
+};
+
+const DINOSAUR_COUNTER_ANIMAL_POWER = {
+  deer: 0.55,
+  boar: 1.35,
+  wolf: 1.8,
+  sheep: 0.35,
+  cattle: 1.7,
+  horse: 1.5
+};
+
+function isDinosaurSpecies(species) {
+  return Boolean(DINOSAUR_DEFS[species]);
+}
+
 const ui = {
   playPauseBtn: document.getElementById("playPauseBtn"),
   restartBtn: document.getElementById("restartBtn"),
@@ -79,6 +134,7 @@ const ui = {
   startOverlay: document.getElementById("startOverlay"),
   speedButtons: [...document.querySelectorAll(".speed")],
   disasterButtons: [...document.querySelectorAll(".disaster")],
+  dinosaurToggleBtn: document.getElementById("dinosaurToggleBtn"),
   population: document.getElementById("statPopulation"),
   lifeExpectancy: document.getElementById("statLifeExpectancy"),
   food: document.getElementById("statFood"),
@@ -176,6 +232,7 @@ class CivilizationSim {
     this.logs = [];
     this.focusTarget = null;
     this.interactionBursts = [];
+    this.dinosaurLogCooldown = 0;
     this.flags = {};
     this.activeDisasters = [];
     this.landslideScars = [];
@@ -265,10 +322,31 @@ class CivilizationSim {
 
   makeAnimal(species, domestic = false, home = null) {
     const zone = home || this.randomZoneForSpecies(species, domestic);
-    return { id: this.nextAnimalId++, species, domestic, x: zone.x + randomFrom(this.rng, -zone.spread, zone.spread), y: zone.y + randomFrom(this.rng, -zone.spread, zone.spread), homeX: zone.x, homeY: zone.y, spread: zone.spread, size: zone.size, speed: zone.speed, t: this.rng(), escape: 0 };
+    const dinosaur = DINOSAUR_DEFS[species];
+    return {
+      id: this.nextAnimalId++,
+      species,
+      domestic,
+      x: zone.x + randomFrom(this.rng, -zone.spread, zone.spread),
+      y: zone.y + randomFrom(this.rng, -zone.spread, zone.spread),
+      homeX: zone.x,
+      homeY: zone.y,
+      spread: zone.spread,
+      size: zone.size,
+      speed: zone.speed,
+      t: this.rng(),
+      escape: 0,
+      isDinosaur: Boolean(dinosaur),
+      diet: dinosaur?.diet || null,
+      attackCooldown: 0,
+      counterCooldown: 0,
+      maxHealth: dinosaur?.maxHealth || null,
+      health: dinosaur ? dinosaur.maxHealth : null
+    };
   }
 
   randomZoneForSpecies(species, domestic = false) {
+    if (DINOSAUR_DEFS[species]) return { ...DINOSAUR_DEFS[species].zone };
     if (domestic) {
       if (species === "horse") return { x: 205, y: 460, spread: 32, size: 8, speed: 0.024 };
       return { x: 175, y: 470, spread: 28, size: 8, speed: 0.02 };
@@ -309,6 +387,19 @@ class CivilizationSim {
       population: this.getAlivePeople().length,
       averageHealth: Number(this.getAverageHealth().toFixed(1)),
       averageLifeExpectancy: Number(this.getAverageLifeExpectancy().toFixed(1)),
+      dinosaurs: {
+        active: this.hasDinosaurs(),
+        total: this.countDinosaurs(),
+        herbivores: this.countDinosaurs("herbivore"),
+        carnivores: this.countDinosaurs("carnivore"),
+        units: this.animals
+          .filter((animal) => isDinosaurSpecies(animal.species))
+          .map((animal) => ({
+            species: animal.species,
+            health: Number((animal.health || 0).toFixed(1)),
+            maxHealth: animal.maxHealth
+          }))
+      },
       resources: { ...this.resources },
       ecology: { ...this.ecology },
       activeDisasters: this.activeDisasters.map((item) => item.type),
@@ -349,6 +440,14 @@ class CivilizationSim {
     return average(this.getAlivePeople().map((person) => person.health));
   }
 
+  countDinosaurs(diet = null) {
+    return this.animals.filter((animal) => isDinosaurSpecies(animal.species) && (!diet || DINOSAUR_DEFS[animal.species].diet === diet)).length;
+  }
+
+  hasDinosaurs() {
+    return this.countDinosaurs() > 0;
+  }
+
   getShelterCapacity() {
     return this.countStructures("tent") * 5 + this.countStructures("hut") * 7 + this.countStructures("hall") * 16 + this.countStructures("apartment") * 18 + this.countStructures("hospital") * 8;
   }
@@ -386,7 +485,8 @@ class CivilizationSim {
       0,
       1.65
     );
-    const disasterPenalty = (this.hasDisaster("disease") ? 7 : 0) + (this.hasDisaster("snow") ? 2.5 : 0) + (this.hasDisaster("drought") ? 2 : 0) + (this.hasDisaster("landslide") ? 1.5 : 0);
+    const dinosaurPenalty = this.countDinosaurs("carnivore") * 2.7 + this.countDinosaurs("herbivore") * 1.4;
+    const disasterPenalty = (this.hasDisaster("disease") ? 7 : 0) + (this.hasDisaster("snow") ? 2.5 : 0) + (this.hasDisaster("drought") ? 2 : 0) + (this.hasDisaster("landslide") ? 1.5 : 0) + dinosaurPenalty;
     const pollutionPenalty = this.ecology.pollution * 0.05;
     const crowding = clamp(population / Math.max(this.getPopulationCapacity(), 1), 0, 1.6);
     const crowdingPenalty = Math.max(0, crowding - 0.92) * 9;
@@ -409,6 +509,7 @@ class CivilizationSim {
       * clamp(shelterCoverage + 0.2, 0.3, 1.25)
       * clamp(1.18 - Math.max(0, crowding - 0.95) * 1.4, 0.15, 1.1)
       * stability
+      * clamp(1 - dinosaurPenalty * 0.12, 0.08, 1)
       * (this.hasDisaster("disease") ? 0.55 : 1)
       * (this.hasDisaster("snow") ? 0.82 : 1);
     return {
@@ -417,6 +518,7 @@ class CivilizationSim {
       birthRate,
       crowding,
       disasterPenalty,
+      dinosaurPenalty,
       foodSecurity,
       medicalCoverage,
       pollutionPenalty,
@@ -445,6 +547,10 @@ class CivilizationSim {
     person.health = 0;
     person.target = null;
     person.taskTimer = 0;
+    if (cause === "dinosaur") {
+      this.maybeLogDinosaurIncident(`공룡 습격으로 ${Math.round(person.age)}세 주민 한 명이 쓰러졌습니다.`, 0.7);
+      return;
+    }
     if (cause === "age") {
       this.log(`${Math.round(person.age)}세 주민 한 명이 생을 마쳤습니다.`);
       return;
@@ -454,6 +560,12 @@ class CivilizationSim {
       return;
     }
     this.log("한 사람이 질병, 굶주림, 혹한, 재해를 이기지 못하고 쓰러졌습니다.");
+  }
+
+  maybeLogDinosaurIncident(message, cooldown = 1.1) {
+    if (this.dinosaurLogCooldown > 0) return;
+    this.dinosaurLogCooldown = cooldown;
+    this.log(message);
   }
 
   countBy(list, key) {
@@ -493,7 +605,7 @@ class CivilizationSim {
   }
 
   labelForAnimal(species) {
-    const labels = { deer: "사슴", boar: "멧돼지", wolf: "늑대", bird: "새", fish: "물고기", sheep: "양", cattle: "소", horse: "말" };
+    const labels = { deer: "사슴", boar: "멧돼지", wolf: "늑대", bird: "새", fish: "물고기", sheep: "양", cattle: "소", horse: "말", triceratops: "트리케라톱스", tyrannosaurus: "티라노사우루스" };
     return labels[species] || species;
   }
 
@@ -562,6 +674,17 @@ class CivilizationSim {
     }
     if (this.focusTarget.type === "animal") {
       const watchers = this.getPeopleTargeting(entity).length;
+      const dinosaur = DINOSAUR_DEFS[entity.species];
+      if (dinosaur) {
+        const pressure = this.getDinosaurCounterPressure(entity);
+        return {
+          kicker: dinosaur.diet === "carnivore" ? "육식 공룡" : "초식 공룡",
+          title: `${this.labelForAnimal(entity.species)} 출현`,
+          description: `체력 ${Math.round(entity.health || 0)} / ${entity.maxHealth}. 주변에 사람 ${pressure.people.length}명과 동물 ${pressure.animals.length}마리가 맞서고 있습니다. ${dinosaur.diet === "carnivore"
+            ? "복원된 육식 공룡으로 사람과 육상 동물을 적극적으로 사냥하지만, 수가 모이면 역공을 받아 쓰러질 수 있습니다."
+            : "복원된 초식 공룡으로 식생을 쓸어 먹고 가까운 생물을 짓밟지만, 여러 사람과 동물이 몰리면 버티지 못합니다."}`
+        };
+      }
       return {
         kicker: entity.domestic ? "가축 생태" : "야생 생태",
         title: `${this.labelForAnimal(entity.species)} ${entity.domestic ? "무리" : "개체"}`,
@@ -624,7 +747,7 @@ class CivilizationSim {
       if (distance <= radius) candidates.push({ type, entity, score: distance / radius + bias });
     };
     for (const person of this.getAlivePeople()) pushCandidate("person", person, 16, -0.22);
-    for (const animal of this.animals) pushCandidate("animal", animal, animal.species === "bird" ? 14 : 18, -0.16);
+    for (const animal of this.animals) pushCandidate("animal", animal, animal.species === "bird" ? 14 : isDinosaurSpecies(animal.species) ? 28 : 18, -0.16);
     for (const plant of this.plants) pushCandidate("plant", plant, plant.type === "tree" || plant.type === "orchard" ? 18 : 14, -0.06);
     for (const site of this.constructionSites) pushCandidate("site", site, Math.max(site.width, site.height) * 0.55 + 8, -0.08);
     for (const structure of this.structures) pushCandidate("structure", structure, Math.max(structure.width || structure.size || 20, structure.height || structure.size || 20) * 0.55 + 8, 0.04);
@@ -679,6 +802,7 @@ class CivilizationSim {
     const yearDelta = scaledDt * 0.42;
     this.timeYears += yearDelta;
     this.weatherPulse += scaledDt;
+    this.dinosaurLogCooldown = Math.max(0, this.dinosaurLogCooldown - yearDelta);
     this.roleRefreshCooldown -= scaledDt;
     this.updateEra();
     this.ensureEraContent();
@@ -805,6 +929,41 @@ class CivilizationSim {
     this.log(`${config.label} 재해가 문명과 생태계에 압박을 주기 시작합니다.`);
   }
 
+  resurrectDinosaurs() {
+    const current = this.countDinosaurs();
+    const remainingSlots = Math.max(0, 8 - current);
+    if (remainingSlots === 0) {
+      this.log("이미 공룡 무리가 들판을 가득 메우고 있습니다.");
+      return;
+    }
+    const population = this.getAlivePeople().length;
+    const wave = current === 0
+      ? ["triceratops", "tyrannosaurus"]
+      : (population >= 60 ? ["triceratops", "tyrannosaurus", "tyrannosaurus"] : ["triceratops", "tyrannosaurus"]);
+    let spawned = 0;
+    for (const species of wave) {
+      if (spawned >= remainingSlots) break;
+      this.animals.push(this.makeAnimal(species));
+      spawned += 1;
+    }
+    this.ecology.vegetation = clamp(this.ecology.vegetation - 3.2 - spawned * 0.9, 10, 100);
+    this.ecology.wildlife = clamp(this.ecology.wildlife - 4.6 - spawned * 1.3, 8, 100);
+    this.log(current === 0
+      ? "복원 실험이 성공하며 트리케라톱스와 티라노사우루스가 다시 대지를 걷기 시작합니다."
+      : "추가 복원으로 공룡 무리가 더 늘어나며 사람과 동물에게 새로운 위협이 생깁니다.");
+  }
+
+  extinctDinosaurs() {
+    const removed = this.countDinosaurs();
+    if (!removed) {
+      this.log("이미 공룡은 자취를 감춘 상태입니다.");
+      return;
+    }
+    for (const animal of this.animals.filter((candidate) => isDinosaurSpecies(candidate.species))) this.clearTargetsForEntity(animal);
+    this.animals = this.animals.filter((animal) => !isDinosaurSpecies(animal.species));
+    this.log(`복원된 공룡 ${removed}마리가 다시 멸종하며 생태계가 안정을 되찾습니다.`);
+  }
+
   spawnLandslideScar() {
     const scar = { x: randomFrom(this.rng, 690, 860), y: randomFrom(this.rng, 170, 360), radius: randomFrom(this.rng, 36, 64), remaining: 14 };
     this.landslideScars.push(scar);
@@ -856,8 +1015,13 @@ class CivilizationSim {
     const drought = this.hasDisaster("drought");
     const landslide = this.hasDisaster("landslide");
     const rain = this.hasDisaster("rain");
-    for (const animal of this.animals) {
+    for (const animal of [...this.animals]) {
+      if (!this.animals.some((candidate) => candidate.id === animal.id)) continue;
       animal.escape = clamp(animal.escape - scaledDt * 0.05, 0, 3);
+      if (isDinosaurSpecies(animal.species)) {
+        this.updateDinosaur(animal, scaledDt, { drought, landslide });
+        continue;
+      }
       animal.t += scaledDt * animal.speed * (animal.escape > 0 ? 2.5 : 1);
       const phaseX = Math.cos(animal.t + animal.id * 0.31);
       const phaseY = Math.sin(animal.t * 0.7 + animal.id * 0.21);
@@ -876,11 +1040,177 @@ class CivilizationSim {
       animal.x += (targetX - animal.x) * 0.03;
       animal.y += (targetY - animal.y) * 0.03;
     }
+    this.resolveDinosaurCounterattacks(scaledDt);
     if (this.countAnimals("deer") < 6 && this.ecology.vegetation > 48 && this.rng() < scaledDt * 0.004) this.animals.push(this.makeAnimal("deer"));
     if (this.countAnimals("bird") < 8 && this.rng() < scaledDt * 0.005) this.animals.push(this.makeAnimal("bird"));
     if (this.countAnimals("fish") < 10 && this.rng() < scaledDt * 0.006) this.animals.push(this.makeAnimal("fish"));
     if (this.flags.agriculture && this.countAnimals("sheep", true) < 6 && this.rng() < scaledDt * 0.003) this.animals.push(this.makeAnimal("sheep", true));
     if (this.flags.agriculture && this.countAnimals("cattle", true) < 4 && this.rng() < scaledDt * 0.002) this.animals.push(this.makeAnimal("cattle", true));
+  }
+
+  updateDinosaur(dinosaur, scaledDt, conditions) {
+    const meta = DINOSAUR_DEFS[dinosaur.species];
+    if (!meta) return;
+    dinosaur.attackCooldown = Math.max(0, dinosaur.attackCooldown - scaledDt * 0.18);
+    dinosaur.counterCooldown = Math.max(0, dinosaur.counterCooldown - scaledDt * 0.22);
+    dinosaur.t += scaledDt * dinosaur.speed * (dinosaur.attackCooldown > 0 ? 1.35 : 1.18);
+    const phaseX = Math.cos(dinosaur.t + dinosaur.id * 0.21);
+    const phaseY = Math.sin(dinosaur.t * 0.75 + dinosaur.id * 0.17);
+    let targetX = dinosaur.homeX + phaseX * dinosaur.spread;
+    let targetY = dinosaur.homeY + phaseY * dinosaur.spread * 0.55;
+    const personTarget = this.findNearestLivingPersonFrom(dinosaur, meta.diet === "carnivore" ? 999 : 70);
+    const animalTarget = this.findNearestAnimalByPredicate(
+      dinosaur,
+      (animal) => animal.id !== dinosaur.id && !isDinosaurSpecies(animal.species) && !["fish", "bird"].includes(animal.species),
+      meta.diet === "carnivore" ? 999 : 78
+    );
+    const plantTarget = meta.diet === "herbivore" ? this.findNearestPlant(dinosaur, ["tree", "berry", "herb", "crop", "orchard"]) : null;
+    let strikeTarget = null;
+    let strikeKind = "";
+    if (meta.diet === "carnivore") {
+      const prey = personTarget || animalTarget;
+      if (prey) {
+        targetX = prey.x;
+        targetY = prey.y;
+        strikeTarget = prey;
+        strikeKind = prey.roleKey ? "person" : "animal";
+      }
+    } else {
+      if (plantTarget) {
+        targetX = plantTarget.x;
+        targetY = plantTarget.y;
+      }
+      if (personTarget && dist(dinosaur, personTarget) < 72) {
+        targetX = personTarget.x;
+        targetY = personTarget.y;
+        strikeTarget = personTarget;
+        strikeKind = "person";
+      } else if (animalTarget && dist(dinosaur, animalTarget) < 72) {
+        targetX = animalTarget.x;
+        targetY = animalTarget.y;
+        strikeTarget = animalTarget;
+        strikeKind = "animal";
+      }
+    }
+    if (conditions.drought && meta.diet === "herbivore") targetX = lerp(targetX, 520, 0.16);
+    if (conditions.landslide && dinosaur.x > 620) targetX = Math.min(targetX, 590);
+    dinosaur.x += (targetX - dinosaur.x) * (meta.diet === "carnivore" ? 0.075 : 0.05);
+    dinosaur.y += (targetY - dinosaur.y) * (meta.diet === "carnivore" ? 0.075 : 0.05);
+    if (meta.diet === "herbivore" && plantTarget && dist(dinosaur, plantTarget) < 34) {
+      plantTarget.growth = clamp(plantTarget.growth - scaledDt * (plantTarget.type === "tree" ? 1.8 : 3.4), 5, plantTarget.maxGrowth);
+      this.ecology.vegetation = clamp(this.ecology.vegetation - scaledDt * 0.12, 10, 100);
+    }
+    if (strikeTarget && dinosaur.attackCooldown <= 0 && dist(dinosaur, strikeTarget) < meta.interactionRadius) {
+      this.tryDinosaurStrike(dinosaur, strikeTarget, strikeKind);
+    }
+  }
+
+  getDinosaurCounterPressure(dinosaur) {
+    const meta = DINOSAUR_DEFS[dinosaur.species];
+    if (!meta) return { people: [], animals: [], peopleStrength: 0, animalStrength: 0, totalAttackers: 0, totalStrength: 0 };
+    const people = [];
+    const animals = [];
+    let peopleStrength = 0;
+    let animalStrength = 0;
+    const weaponBonus = 1 + this.eraIndex * 0.08 + (this.flags.cityAge ? 0.06 : 0) + (this.flags.industryAge ? 0.14 : 0) + (this.flags.modernAge ? 0.18 : 0);
+    for (const person of this.getAlivePeople()) {
+      const basePower = DINOSAUR_COUNTER_ROLE_POWER[person.roleKey] || 0.65;
+      const reach = meta.counterRadius + (["hunter", "guard"].includes(person.roleKey) ? 18 : 0);
+      if (basePower <= 0 || dist(person, dinosaur) > reach) continue;
+      const condition = clamp((person.health * 0.5 + person.energy * 0.35 + person.warmth * 0.15) / 100, 0.4, 1.15);
+      const taskBonus = person.target === dinosaur ? 1.35 : ["hunt", "guard"].includes(person.taskKey) ? 1.12 : 1;
+      people.push(person);
+      peopleStrength += basePower * weaponBonus * condition * taskBonus;
+    }
+    for (const animal of this.animals) {
+      const basePower = DINOSAUR_COUNTER_ANIMAL_POWER[animal.species] || 0;
+      if (animal.id === dinosaur.id || isDinosaurSpecies(animal.species) || ["fish", "bird"].includes(animal.species)) continue;
+      if (basePower <= 0 || dist(animal, dinosaur) > meta.counterRadius - 6) continue;
+      animals.push(animal);
+      animalStrength += basePower * (animal.domestic ? 1.08 : 1);
+    }
+    return {
+      people,
+      animals,
+      peopleStrength,
+      animalStrength,
+      totalAttackers: people.length + animals.length,
+      totalStrength: peopleStrength + animalStrength
+    };
+  }
+
+  getHumanDinosaurDamage(person, taskKey = person.taskKey) {
+    const roleBonus = person.roleKey === "guard" ? 4.2 : person.roleKey === "hunter" ? 2.8 : 0.8;
+    const taskBonus = taskKey === "guard" ? 13.5 : 11.5;
+    const eraBonus = this.eraIndex * (taskKey === "guard" ? 1.55 : 1.35) + (this.flags.industryAge ? 3.2 : 0) + (this.flags.modernAge ? 4.6 : 0);
+    const condition = clamp((person.health * 0.55 + person.energy * 0.35 + person.warmth * 0.1) / 100, 0.45, 1.18);
+    return (taskBonus + roleBonus + eraBonus) * condition;
+  }
+
+  damageDinosaur(dinosaur, amount, options = {}) {
+    if (!dinosaur || !isDinosaurSpecies(dinosaur.species) || !this.animals.some((candidate) => candidate.id === dinosaur.id)) return false;
+    dinosaur.health = clamp(dinosaur.health - amount, 0, dinosaur.maxHealth || DINOSAUR_DEFS[dinosaur.species].maxHealth);
+    dinosaur.attackCooldown = Math.max(dinosaur.attackCooldown, 0.45);
+    dinosaur.counterCooldown = Math.max(dinosaur.counterCooldown, 0.4);
+    if (options.emitBurst) this.emitInteractionBurst(dinosaur.x, dinosaur.y, options.burstTask || "guard");
+    if (dinosaur.health <= 0) {
+      this.killDinosaur(dinosaur, options.cause, options.attackers || 0);
+      return true;
+    }
+    return false;
+  }
+
+  killDinosaur(dinosaur, cause = "human", attackers = 0) {
+    const meta = DINOSAUR_DEFS[dinosaur.species];
+    if (!meta) return;
+    const label = this.labelForAnimal(dinosaur.species);
+    this.removeAnimal(dinosaur);
+    this.resources.food = clamp(this.resources.food + meta.rewardFood, 0, 600);
+    this.resources.knowledge = clamp(this.resources.knowledge + 0.4 + this.eraIndex * 0.08, 0, 400);
+    this.ecology.wildlife = clamp(this.ecology.wildlife + (meta.diet === "carnivore" ? 4.8 : 3.6), 8, 100);
+    if (cause === "animal") {
+      this.log(`${label} 한 마리가 야생과 가축 무리의 거센 반격 끝에 쓰러졌습니다.`);
+      return;
+    }
+    if (cause === "swarm") {
+      this.log(`${label} 한 마리가 사람과 동물 무리의 합동 반격 끝에 쓰러졌습니다.`);
+      return;
+    }
+    this.log(`${label} 한 마리가 사냥꾼과 수호자들의 집중 공격에 쓰러졌습니다.`);
+  }
+
+  resolveDinosaurCounterattacks(scaledDt) {
+    for (const dinosaur of [...this.animals.filter((animal) => isDinosaurSpecies(animal.species))]) {
+      if (!this.animals.some((candidate) => candidate.id === dinosaur.id) || dinosaur.counterCooldown > 0) continue;
+      const meta = DINOSAUR_DEFS[dinosaur.species];
+      const pressure = this.getDinosaurCounterPressure(dinosaur);
+      const crowdReady = pressure.people.length >= 3 || pressure.animals.length >= 4 || pressure.totalAttackers >= 5;
+      if (!meta || !crowdReady || pressure.totalStrength < meta.counterThreshold) continue;
+      const damage = (2.8 + Math.max(0, pressure.totalStrength - meta.counterThreshold) * 1.7) * clamp(0.78 + scaledDt * 0.16, 0.78, 1.35);
+      dinosaur.counterCooldown = pressure.people.length >= pressure.animals.length ? 0.9 : 1.15;
+      this.damageDinosaur(dinosaur, damage, {
+        cause: pressure.people.length && pressure.animals.length ? "swarm" : pressure.people.length ? "human" : "animal",
+        attackers: pressure.totalAttackers,
+        emitBurst: true,
+        burstTask: pressure.people.length >= pressure.animals.length ? "guard" : "herd"
+      });
+    }
+  }
+
+  tryDinosaurStrike(dinosaur, target, targetKind) {
+    const meta = DINOSAUR_DEFS[dinosaur.species];
+    if (!meta) return;
+    dinosaur.attackCooldown = meta.diet === "carnivore" ? 1.2 : 1.55;
+    if (targetKind === "person") {
+      this.recordDeath(target, "dinosaur");
+      return;
+    }
+    const targetLabel = this.labelForAnimal(target.species);
+    this.removeAnimal(target);
+    this.ecology.wildlife = clamp(this.ecology.wildlife - (target.domestic ? 2.2 : 1.4), 8, 100);
+    this.maybeLogDinosaurIncident(meta.diet === "carnivore"
+      ? `${this.labelForAnimal(dinosaur.species)}가 ${targetLabel} 한 마리를 사냥했습니다.`
+      : `${this.labelForAnimal(dinosaur.species)}가 돌진해 ${targetLabel} 한 마리를 짓밟았습니다.`);
   }
   updatePeople(scaledDt, yearDelta) {
     const rain = this.hasDisaster("rain");
@@ -953,6 +1283,15 @@ class CivilizationSim {
         break;
       }
       case "hunter": {
+        const dinosaur = this.findNearestAnimalByPredicate(
+          person,
+          (animal) => isDinosaurSpecies(animal.species) && (animal.diet === "carnivore" || animal.health < animal.maxHealth * 0.8),
+          this.flags.industryAge ? 250 : 195
+        );
+        if (dinosaur) {
+          this.setTask(person, "hunt", dinosaur, `${this.labelForAnimal(dinosaur.species)}를 추적하는 중`, 1.6);
+          break;
+        }
         const animal = this.findNearestAnimal(person, ["deer", "boar", "wolf"], false);
         if (animal) this.setTask(person, "hunt", animal, `${animal.species === "wolf" ? "늑대" : animal.species === "boar" ? "멧돼지" : "사슴"}를 추적하는 중`, 1.8);
         break;
@@ -1016,6 +1355,15 @@ class CivilizationSim {
         break;
       }
       case "guard": {
+        const dinosaur = this.findNearestAnimalByPredicate(
+          person,
+          (animal) => isDinosaurSpecies(animal.species) && (animal.diet === "carnivore" || dist(person, animal) < 170),
+          this.flags.modernAge ? 280 : 230
+        );
+        if (dinosaur) {
+          this.setTask(person, "guard", dinosaur, `${this.labelForAnimal(dinosaur.species)}를 막아서는 중`, 1.1);
+          break;
+        }
         const wolf = this.findNearestAnimal(person, ["wolf"], false);
         if (wolf && this.flags.agriculture) {
           this.setTask(person, "guard", wolf, "가축과 도시를 위협하는 야생을 밀어내는 중", 1.2);
@@ -1106,10 +1454,15 @@ class CivilizationSim {
         break;
       case "hunt":
         if (person.target && person.target.species) {
+          this.emitInteractionBurst(person.target.x, person.target.y, "hunt");
+          if (isDinosaurSpecies(person.target.species)) {
+            const killed = this.damageDinosaur(person.target, this.getHumanDinosaurDamage(person, "hunt"), { cause: "human", attackers: 1 });
+            this.resources.knowledge += killed ? 0.32 : 0.18;
+            break;
+          }
           this.resources.food += 3.4;
           this.resources.knowledge += 0.15;
           this.ecology.wildlife -= 0.25;
-          this.emitInteractionBurst(person.target.x, person.target.y, "hunt");
           this.resetAnimal(person.target);
         }
         break;
@@ -1178,6 +1531,12 @@ class CivilizationSim {
         break;
       case "guard":
         this.resources.knowledge += 0.1;
+        if (person.target && isDinosaurSpecies(person.target.species)) {
+          this.emitInteractionBurst(person.target.x, person.target.y, "guard");
+          const killed = this.damageDinosaur(person.target, this.getHumanDinosaurDamage(person, "guard"), { cause: "human", attackers: 1 });
+          if (!killed) this.resources.knowledge += 0.08;
+          break;
+        }
         if (person.target && person.target.species === "wolf") {
           this.emitInteractionBurst(person.target.x, person.target.y, "guard");
           this.resetAnimal(person.target);
@@ -1222,6 +1581,20 @@ class CivilizationSim {
     animal.spread = zone.spread;
   }
 
+  clearTargetsForEntity(entity) {
+    for (const person of this.getAlivePeople()) {
+      if (person.target === entity) {
+        person.target = null;
+        person.taskTimer = 0;
+      }
+    }
+  }
+
+  removeAnimal(animal) {
+    this.clearTargetsForEntity(animal);
+    this.animals = this.animals.filter((candidate) => candidate.id !== animal.id);
+  }
+
   findNearestStructure(person, kinds) {
     let best = null;
     let bestDistance = Infinity;
@@ -1257,6 +1630,33 @@ class CivilizationSim {
       if (!speciesList.includes(animal.species)) continue;
       if (domestic !== null && animal.domestic !== domestic) continue;
       const current = dist(person, animal);
+      if (current < bestDistance) {
+        bestDistance = current;
+        best = animal;
+      }
+    }
+    return best;
+  }
+
+  findNearestLivingPersonFrom(origin, maxDistance = Infinity) {
+    let best = null;
+    let bestDistance = maxDistance;
+    for (const person of this.getAlivePeople()) {
+      const current = dist(origin, person);
+      if (current < bestDistance) {
+        bestDistance = current;
+        best = person;
+      }
+    }
+    return best;
+  }
+
+  findNearestAnimalByPredicate(origin, predicate, maxDistance = Infinity) {
+    let best = null;
+    let bestDistance = maxDistance;
+    for (const animal of this.animals) {
+      if (!predicate(animal)) continue;
+      const current = dist(origin, animal);
       if (current < bestDistance) {
         bestDistance = current;
         best = animal;
@@ -1313,7 +1713,7 @@ class CivilizationSim {
     this.ecology.pollution += this.countStructures("factory") * scaledDt * 0.018;
     this.ecology.pollution += this.countStructures("powerplant") * scaledDt * 0.02;
     const plantScore = average(this.plants.map((plant) => plant.growth)) + this.countPlants("crop") * 0.6 + this.countPlants("orchard") * 0.8;
-    const wildlifeScore = this.animals.length * 3.3 + this.countAnimals("deer") * 2 + this.countAnimals("bird") * 1.2 + this.countDomesticAnimals() * 0.6;
+    const wildlifeScore = this.animals.length * 3.3 + this.countAnimals("deer") * 2 + this.countAnimals("bird") * 1.2 + this.countDomesticAnimals() * 0.6 - this.countDinosaurs("carnivore") * 9 - this.countDinosaurs("herbivore") * 5;
     this.ecology.vegetation = clamp(plantScore - this.ecology.pollution * 0.7, 10, 100);
     this.ecology.wildlife = clamp(wildlifeScore - this.ecology.pollution * 0.45, 8, 100);
     this.resources.food = clamp(this.resources.food, 0, 600);
@@ -1350,7 +1750,7 @@ class CivilizationSim {
       this.rebalanceRoles();
       this.log(`정착과 양육 여건이 나아지며 새 세대 ${entrants}명이 성인이 되어 공동체에 합류합니다.`);
     }
-    const collapsePressure = Math.max(0, 0.34 - demographic.foodSecurity) + Math.max(0, demographic.crowding - 1) * 0.7 + demographic.disasterPenalty / 24;
+    const collapsePressure = Math.max(0, 0.34 - demographic.foodSecurity) + Math.max(0, demographic.crowding - 1) * 0.7 + demographic.disasterPenalty / 24 + demographic.dinosaurPenalty * 0.1;
     if (alive.length > 8 && collapsePressure > 0.18 && this.rng() < yearDelta * collapsePressure * 0.1) {
       const vulnerable = [...alive].sort((left, right) => (right.age - right.lifeExpectancy) - (left.age - left.lifeExpectancy) || left.health - right.health)[0];
       if (vulnerable) this.recordDeath(vulnerable, "collapse");
@@ -1365,6 +1765,7 @@ class CivilizationSim {
       `평균 기대 수명 ${Math.round(this.getAverageLifeExpectancy())}세, 주거 안정 ${Math.round(demographic.shelterCoverage * 100)}%, 위생 ${Math.round(demographic.sanitationIndex * 100)}% 수준입니다.`,
       `지식 ${Math.round(this.resources.knowledge)}, 에너지 ${Math.round(this.resources.energy)}, 오염 ${Math.round(this.ecology.pollution)} 수준입니다.`
     ];
+    if (this.hasDinosaurs()) items.push(`복원 공룡 ${this.countDinosaurs()}마리가 생태계를 뒤흔들며 평균 기대 수명과 개체수를 끌어내리고 있습니다.`);
     if (this.flags.agriculture) items.push(`농경지 ${this.countPlants("crop")}곳, 과수원 ${this.countPlants("orchard")}곳, 가축 ${this.countDomesticAnimals()}마리가 문명을 지탱합니다.`);
     if (this.flags.cityAge) items.push(`시장 ${this.countStructures("market")}곳, 부두 ${this.countStructures("dock")}곳, 배 ${this.countVehicles("boat")}척이 물자 흐름을 만듭니다.`);
     if (this.flags.industryAge) items.push(`공장 ${this.countStructures("factory")}곳, 철도 ${this.countVehicles("train")}량, 금속 ${Math.round(this.resources.metal)} 단위가 산업 구조를 키웁니다.`);
@@ -1379,6 +1780,10 @@ class CivilizationSim {
       return acc;
     }, {});
     const items = [];
+    if (this.hasDinosaurs()) items.push(`복원된 공룡 ${this.countDinosaurs()}마리가 평원을 배회하며 사람과 동물 수를 압박하고 있습니다.`);
+    if (this.countDinosaurs("carnivore")) items.push(`육식 공룡 ${this.countDinosaurs("carnivore")}마리가 사람과 육상 동물을 직접 사냥하고 있습니다.`);
+    if (this.countDinosaurs("herbivore")) items.push(`초식 공룡 ${this.countDinosaurs("herbivore")}마리가 식생을 뜯어먹고 가까운 생물을 짓밟고 있습니다.`);
+    if (this.hasDinosaurs() && (taskCounts.hunt || taskCounts.guard)) items.push(`사냥꾼과 수호자 ${Math.max(0, (taskCounts.hunt || 0) + (taskCounts.guard || 0))}명이 공룡을 포위하며 집단 반격을 시도하고 있습니다.`);
     if (taskCounts.forage) items.push(`채집자 ${taskCounts.forage}명이 열매와 약초를 모으며 숲의 식물을 이용하고 있습니다.`);
     if (taskCounts.hunt) items.push(`사냥꾼 ${taskCounts.hunt}명이 사슴과 멧돼지를 추적하며 야생동물과 직접 맞닿아 있습니다.`);
     if (taskCounts.fish) items.push(`어부 ${taskCounts.fish}명이 강과 하구에서 물고기를 얻고 있습니다.`);
@@ -1394,8 +1799,14 @@ class CivilizationSim {
   updateUi() {
     const alive = this.getAlivePeople();
     const focus = this.getFocusDisplay();
+    const dinosaursActive = this.hasDinosaurs();
     ui.playPauseBtn.textContent = this.running ? "일시정지" : "다시 재생";
     ui.speedButtons.forEach((button) => button.classList.toggle("active", Number(button.dataset.speed) === this.speed));
+    if (ui.dinosaurToggleBtn) {
+      ui.dinosaurToggleBtn.dataset.dinosaurAction = dinosaursActive ? "extinct" : "resurrect";
+      ui.dinosaurToggleBtn.textContent = dinosaursActive ? "공룡 멸종" : "공룡 부활";
+      ui.dinosaurToggleBtn.classList.toggle("ghost", dinosaursActive);
+    }
     ui.population.textContent = String(alive.length);
     ui.lifeExpectancy.textContent = `${Math.round(this.getAverageLifeExpectancy())}세`;
     ui.food.textContent = String(Math.round(this.resources.food));
@@ -1410,8 +1821,10 @@ class CivilizationSim {
     ui.focusKicker.textContent = focus.kicker;
     ui.focusTitle.textContent = focus.title;
     ui.focusDescription.textContent = focus.description;
-    if (this.activeDisasters.length === 0) ui.activeDisasters.innerHTML = `<span class="tag">평온함</span>`;
-    else ui.activeDisasters.innerHTML = this.activeDisasters.map((disaster) => `<span class="tag ${disaster.type}">${disasterConfigs[disaster.type].label} ${disaster.remaining.toFixed(1)}년</span>`).join("");
+    const alertTags = this.activeDisasters.map((disaster) => `<span class="tag ${disaster.type}">${disasterConfigs[disaster.type].label} ${disaster.remaining.toFixed(1)}년</span>`);
+    if (this.hasDinosaurs()) alertTags.unshift(`<span class="tag dinosaur">공룡 출현 초식 ${this.countDinosaurs("herbivore")} / 육식 ${this.countDinosaurs("carnivore")}</span>`);
+    if (alertTags.length === 0) ui.activeDisasters.innerHTML = `<span class="tag">평온함</span>`;
+    else ui.activeDisasters.innerHTML = alertTags.join("");
   }
 
   getNightFactor() {
@@ -1819,7 +2232,7 @@ class CivilizationSim {
     for (const a of this.animals) {
       ctx.fillStyle = "rgba(38, 27, 18, 0.1)";
       ctx.beginPath();
-      ctx.ellipse(a.x, a.y + 6, a.species === "bird" ? 4 : 7, 2.4, 0, 0, Math.PI * 2);
+      ctx.ellipse(a.x, a.y + 6, a.species === "bird" ? 4 : isDinosaurSpecies(a.species) ? 16 : 7, isDinosaurSpecies(a.species) ? 5 : 2.4, 0, 0, Math.PI * 2);
       ctx.fill();
       if (a.species === "deer") {
         ctx.fillStyle = "#7f5b3b";
@@ -1879,6 +2292,67 @@ class CivilizationSim {
         ctx.ellipse(a.x, a.y, 12, 7, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillRect(a.x + 8, a.y - 6, 6, 5);
+      } else if (a.species === "triceratops") {
+        ctx.fillStyle = "#758260";
+        ctx.beginPath();
+        ctx.ellipse(a.x, a.y, 19, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(a.x - 15, a.y - 2, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#b8bf87";
+        ctx.beginPath();
+        ctx.arc(a.x - 20, a.y - 4, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#e7dfbf";
+        ctx.beginPath();
+        ctx.moveTo(a.x - 24, a.y - 5);
+        ctx.lineTo(a.x - 33, a.y - 9);
+        ctx.lineTo(a.x - 26, a.y - 1);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(a.x - 17, a.y - 8);
+        ctx.lineTo(a.x - 22, a.y - 18);
+        ctx.lineTo(a.x - 14, a.y - 11);
+        ctx.closePath();
+        ctx.fill();
+      } else if (a.species === "tyrannosaurus") {
+        ctx.fillStyle = "#745642";
+        ctx.beginPath();
+        ctx.ellipse(a.x, a.y, 18, 10, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(a.x + 16, a.y - 10, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(a.x - 14, a.y - 2);
+        ctx.lineTo(a.x - 34, a.y - 12);
+        ctx.lineTo(a.x - 20, a.y + 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "#463124";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(a.x - 4, a.y + 8);
+        ctx.lineTo(a.x - 7, a.y + 18);
+        ctx.moveTo(a.x + 6, a.y + 8);
+        ctx.lineTo(a.x + 9, a.y + 20);
+        ctx.stroke();
+      }
+      if (isDinosaurSpecies(a.species)) {
+        const healthRatio = clamp((a.health || 0) / Math.max(a.maxHealth || 1, 1), 0, 1);
+        ctx.fillStyle = "rgba(21, 16, 12, 0.72)";
+        ctx.fillRect(a.x - 16, a.y - 28, 32, 4);
+        ctx.fillStyle = a.diet === "carnivore"
+          ? (healthRatio > 0.45 ? "#e58659" : "#f0c879")
+          : (healthRatio > 0.45 ? "#b7d37f" : "#e8d48d");
+        ctx.fillRect(a.x - 16, a.y - 28, 32 * healthRatio, 4);
+        ctx.strokeStyle = a.diet === "carnivore" ? "rgba(224, 126, 85, 0.78)" : "rgba(186, 214, 129, 0.72)";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(a.x, a.y, 15, 0, Math.PI * 2);
+        ctx.stroke();
       }
       if (a.domestic) {
         ctx.strokeStyle = "rgba(255, 240, 205, 0.9)";
@@ -2163,6 +2637,14 @@ for (const button of ui.disasterButtons) {
   button.addEventListener("click", () => {
     if (!sim.started) sim.start();
     sim.triggerDisaster(button.dataset.disaster);
+  });
+}
+
+if (ui.dinosaurToggleBtn) {
+  ui.dinosaurToggleBtn.addEventListener("click", () => {
+    if (!sim.started) sim.start();
+    if (ui.dinosaurToggleBtn.dataset.dinosaurAction === "resurrect") sim.resurrectDinosaurs();
+    else sim.extinctDinosaurs();
   });
 }
 
