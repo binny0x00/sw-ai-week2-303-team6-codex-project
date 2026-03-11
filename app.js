@@ -4,7 +4,7 @@ const ctx = canvas.getContext("2d");
 
 const ERA_DEFS = [
   { name: "원시 시대", threshold: 0, yearGate: 0, summary: "채집과 사냥으로 생존을 이어갑니다.", lifeExpectancy: 23, birthRate: 0.018 },
-  { name: "불의 시대", threshold: 22, yearGate: 12, summary: "공동 불씨가 밤의 활동을 가능하게 합니다.", lifeExpectancy: 27, birthRate: 0.019 },
+  { name: "불의 시대", threshold: 22, yearGate: 18, summary: "공동 불씨가 밤의 활동을 가능하게 합니다.", lifeExpectancy: 27, birthRate: 0.019 },
   { name: "석기 시대", threshold: 44, yearGate: 28, summary: "돌도구와 작업장이 생산성을 끌어올립니다.", lifeExpectancy: 31, birthRate: 0.0205 },
   { name: "농경 시대", threshold: 74, yearGate: 55, summary: "밭, 곡물창고, 가축 우리가 정착을 만듭니다.", lifeExpectancy: 39, birthRate: 0.024 },
   { name: "고대 도시 시대", threshold: 110, yearGate: 90, summary: "시장과 부두, 다리가 문명의 흐름을 넓힙니다.", lifeExpectancy: 47, birthRate: 0.021 },
@@ -77,12 +77,16 @@ const ROLE_SCHEMES = [
 ];
 
 const disasterConfigs = {
-  rain: { label: "비", duration: 14, color: "rgba(90, 129, 180, 0.22)" },
-  snow: { label: "폭설", duration: 12, color: "rgba(240, 246, 255, 0.24)" },
-  drought: { label: "가뭄", duration: 18, color: "rgba(194, 157, 95, 0.18)" },
-  landslide: { label: "산사태", duration: 10, color: "rgba(120, 83, 57, 0.22)" },
-  disease: { label: "질병", duration: 16, color: "rgba(167, 83, 67, 0.18)" }
+  rain: { label: "비", color: "rgba(90, 129, 180, 0.22)" },
+  snow: { label: "폭설", color: "rgba(240, 246, 255, 0.24)" },
+  drought: { label: "가뭄", color: "rgba(194, 157, 95, 0.18)" },
+  landslide: { label: "산사태", color: "rgba(120, 83, 57, 0.22)" },
+  disease: { label: "질병", color: "rgba(167, 83, 67, 0.18)" }
 };
+
+const MONTHS_PER_YEAR = 12;
+const MIN_DISASTER_MONTHS = 1;
+const MAX_DISASTER_MONTHS = 12;
 
 const DINOSAUR_DEFS = {
   triceratops: {
@@ -249,6 +253,13 @@ class CivilizationSim {
     this.flags = {};
     this.activeDisasters = [];
     this.landslideScars = [];
+    this.disasterTickProgress = 0;
+    this.disasterClimate = {
+      rainPressure: 0,
+      droughtPressure: 0,
+      snowPressure: 0,
+      diseasePressure: 0
+    };
     this.constructionSites = [];
     this.routes = {
       road: [{ x: 240, y: 410 }, { x: 390, y: 420 }, { x: 560, y: 430 }, { x: 740, y: 460 }, { x: 860, y: 470 }],
@@ -257,7 +268,7 @@ class CivilizationSim {
     };
     this.resources = { food: 58, wood: 26, stone: 8, metal: 0, energy: 8, knowledge: 6 };
     this.ecology = { vegetation: 82, wildlife: 76, pollution: 4 };
-    this.people = this.createPopulation(24, { ageMin: 8, ageMax: 24 });
+    this.people = this.createPopulation(8, { ageMin: 8, ageMax: 24 });
     this.plants = this.createPlants();
     this.animals = this.createAnimals();
     this.structures = [];
@@ -372,7 +383,6 @@ class CivilizationSim {
   }
 
   initializeSettlement() {
-    this.addStructure("campfire", 250, 375, { key: "campfire-core", size: 18 });
     this.addStructure("tent", 205, 410, { key: "tent-a", size: 22 });
     this.addStructure("tent", 300, 408, { key: "tent-b", size: 20 });
     this.addStructure("totem", 258, 338, { key: "totem", size: 14 });
@@ -418,7 +428,20 @@ class CivilizationSim {
       resources: { ...this.resources },
       ecology: { ...this.ecology },
       activeDisasters: this.activeDisasters.map((item) => item.type),
-      counts: { structures: this.structures.length, animals: this.animals.length, plants: this.plants.length, vehicles: this.vehicles.length, sites: this.constructionSites.length },
+      disasterDetails: this.activeDisasters.map((item) => ({
+        type: item.type,
+        label: disasterConfigs[item.type]?.label || item.type,
+        durationMonths: item.durationMonths,
+        remainingMonths: item.remainingMonths
+      })),
+      disasterClimate: {
+        rainPressure: Number(this.disasterClimate.rainPressure.toFixed(1)),
+        droughtPressure: Number(this.disasterClimate.droughtPressure.toFixed(1)),
+        snowPressure: Number(this.disasterClimate.snowPressure.toFixed(1)),
+        diseasePressure: Number(this.disasterClimate.diseasePressure.toFixed(1))
+      },
+      counts: { structures: this.getOperationalStructures().length, animals: this.animals.length, plants: this.plants.length, vehicles: this.vehicles.length, sites: this.constructionSites.length },
+      structuresByKind: this.countBy(this.getOperationalStructures(), "kind"),
       animalsBySpecies: this.countBy(this.animals, "species"),
       plantsByType: this.countBy(this.plants, "type"),
       focus: this.getFocusPayload(),
@@ -461,6 +484,14 @@ class CivilizationSim {
     const year = Math.round(this.displayYears);
     if (year < 1) return `기원전 ${Math.abs(year) + 1}년`;
     return `${year}년`;
+  }
+
+  getSimulationMonth() {
+    return Math.floor(this.timeYears * MONTHS_PER_YEAR);
+  }
+
+  formatMonths(months) {
+    return `${Math.max(0, Math.round(months))}개월`;
   }
 
   getAlivePeople() {
@@ -578,8 +609,13 @@ class CivilizationSim {
     person.health = 0;
     person.target = null;
     person.taskTimer = 0;
+    if (details.silent) return;
     if (cause === "dinosaur") {
       this.maybeLogDinosaurIncident(`공룡 습격으로 ${Math.round(person.age)}세 주민 한 명이 쓰러졌습니다.`, 0.7);
+      return;
+    }
+    if (cause === "landslide") {
+      this.log(`${Math.round(person.age)}세 주민 한 명이 산사태에 휩쓸려 숨졌습니다.`);
       return;
     }
     if (cause === "age") {
@@ -607,7 +643,15 @@ class CivilizationSim {
   }
 
   countStructures(kind) {
-    return this.structures.filter((structure) => structure.kind === kind).length;
+    return this.structures.filter((structure) => structure.kind === kind && this.isStructureOperational(structure)).length;
+  }
+
+  isStructureOperational(structure) {
+    return Boolean(structure) && !structure.meta?.collapsed;
+  }
+
+  getOperationalStructures() {
+    return this.structures.filter((structure) => this.isStructureOperational(structure));
   }
 
   countPlants(type) {
@@ -738,12 +782,15 @@ class CivilizationSim {
     }
     if (this.focusTarget.type === "structure") {
       const workers = this.getPeopleTargeting(entity).length;
+      const collapsed = entity.meta.collapsed;
       return {
         kicker: "건물 관찰",
-        title: `${this.labelForStructure(entity.kind)}${entity.meta.damaged ? " · 손상됨" : ""}`,
+        title: `${this.labelForStructure(entity.kind)}${collapsed ? " · 붕괴됨" : entity.meta.damaged ? " · 손상됨" : ""}`,
         description: workers > 0
-          ? `현재 ${workers}명이 이 건물과 관련된 일을 수행하고 있습니다. ${entity.meta.damaged ? "재해 여파로 기능이 일부 떨어져 있습니다." : "문명의 생활 방식과 시대 변화를 가장 직접적으로 보여주는 거점입니다."}`
-          : entity.meta.damaged
+          ? `현재 ${workers}명이 이 건물과 관련된 일을 수행하고 있습니다. ${collapsed ? "붕괴 상태라 더는 정상 기능을 하지 못합니다." : entity.meta.damaged ? "재해 여파로 기능이 일부 떨어져 있습니다." : "문명의 생활 방식과 시대 변화를 가장 직접적으로 보여주는 거점입니다."}`
+          : collapsed
+            ? "재해로 붕괴된 상태입니다. 건물 수와 수용력 계산에서 제외되며 잔해만 남아 있습니다."
+            : entity.meta.damaged
             ? "재해 여파로 손상된 상태입니다. 주변 인력이 접근하면 문명 운영에 영향을 줍니다."
             : "사람들의 이동, 저장, 생산, 학습, 의료, 에너지 흐름이 이 건물을 중심으로 만들어집니다."
       };
@@ -791,7 +838,7 @@ class CivilizationSim {
   }
 
   computeCivilizationScore() {
-    return this.timeYears * 1.15 + this.resources.knowledge * 1.6 + this.structures.length * 2.5 + this.getAlivePeople().length * 0.7 + this.vehicles.length * 2.2 + this.resources.energy * 0.25 + this.countDomesticAnimals() * 1.5 - this.ecology.pollution * 0.5;
+    return this.timeYears * 1.15 + this.resources.knowledge * 1.6 + this.getOperationalStructures().length * 2.5 + this.getAlivePeople().length * 0.7 + this.vehicles.length * 2.2 + this.resources.energy * 0.25 + this.countDomesticAnimals() * 1.5 - this.ecology.pollution * 0.5;
   }
 
   log(message) {
@@ -860,7 +907,7 @@ class CivilizationSim {
     this.roleRefreshCooldown -= scaledDt;
     this.updateEra();
     this.ensureEraContent();
-    this.updateDisasters(scaledDt);
+    this.updateDisasters(yearDelta);
     this.updateInteractionBursts(scaledDt);
     this.updatePlants(scaledDt);
     this.updateAnimals(scaledDt);
@@ -907,6 +954,7 @@ class CivilizationSim {
   ensureEraContent() {
     if (this.eraIndex >= 1 && !this.flags.fireAge) {
       this.flags.fireAge = true;
+      this.addStructure("campfire", 250, 375, { key: "campfire-core", size: 18 });
       this.addStructure("campfire", 300, 375, { key: "campfire-east", size: 16 });
       this.queueConstruction("hut", 220, 418, { key: "hut-a" });
       this.queueConstruction("hut", 312, 418, { key: "hut-b" });
@@ -975,12 +1023,337 @@ class CivilizationSim {
     }
   }
 
-  triggerDisaster(type) {
+  getActiveDisaster(type) {
+    return this.activeDisasters.find((disaster) => disaster.type === type) || null;
+  }
+
+  getRandomDisasterDurationMonths() {
+    return MIN_DISASTER_MONTHS + Math.floor(this.rng() * MAX_DISASTER_MONTHS);
+  }
+
+  shuffleList(items) {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(this.rng() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  }
+
+  collapseStructure(structure, reason = "disaster") {
+    if (!structure || structure.meta?.collapsed) return false;
+    this.clearTargetsForEntity(structure);
+    structure.meta = {
+      ...structure.meta,
+      damaged: true,
+      collapsed: true,
+      collapseReason: reason,
+      collapsedAtMonth: this.getSimulationMonth()
+    };
+    return true;
+  }
+
+  removeConstructionSite(site) {
+    if (!site) return false;
+    this.clearTargetsForEntity(site);
+    const before = this.constructionSites.length;
+    this.constructionSites = this.constructionSites.filter((candidate) => candidate.id !== site.id);
+    return this.constructionSites.length !== before;
+  }
+
+  triggerDisaster(type, options = {}) {
     const config = disasterConfigs[type];
-    if (!config) return;
-    this.activeDisasters.push({ type, remaining: config.duration });
-    if (type === "landslide") this.spawnLandslideScar();
-    this.log(`${config.label} 재해가 문명과 생태계에 압박을 주기 시작합니다.`);
+    if (!config || this.getActiveDisaster(type)) return false;
+    const durationMonths = clamp(Math.round(options.durationMonths || this.getRandomDisasterDurationMonths()), MIN_DISASTER_MONTHS, MAX_DISASTER_MONTHS);
+    const disaster = {
+      type,
+      durationMonths,
+      remainingMonths: durationMonths,
+      startedAtMonth: this.getSimulationMonth()
+    };
+    this.activeDisasters.push(disaster);
+    const summary = this.applyDisasterStartEffect(disaster);
+    const durationText = this.formatMonths(durationMonths);
+    const lead = options.leadMessage ? `${options.leadMessage} ` : "";
+    this.log(summary
+      ? `${lead}${config.label} 발생: ${summary} 재해는 ${durationText} 동안 이어집니다.`
+      : `${lead}${config.label} 재해가 시작되었습니다. ${durationText} 동안 영향이 이어집니다.`);
+    return true;
+  }
+
+  applyDisasterStartEffect(disaster) {
+    switch (disaster.type) {
+      case "rain": {
+        let chilled = 0;
+        for (const person of this.getAlivePeople()) {
+          person.warmth = clamp(person.warmth - randomFrom(this.rng, 2, 5), 0, 100);
+          person.energy = clamp(person.energy - randomFrom(this.rng, 1, 3), 0, 100);
+          if (person.warmth < 58) chilled += 1;
+        }
+        this.ecology.vegetation = clamp(this.ecology.vegetation + 6, 10, 100);
+        this.ecology.wildlife = clamp(this.ecology.wildlife + 2.5, 8, 100);
+        return `빗줄기가 쏟아져 식생이 살아나고 주민 ${chilled}명이 젖어 체온이 떨어졌습니다.`;
+      }
+      case "snow": {
+        let severe = 0;
+        let deaths = 0;
+        for (const person of this.getAlivePeople()) {
+          person.warmth = clamp(person.warmth - randomFrom(this.rng, 9, 15), 0, 100);
+          person.energy = clamp(person.energy - randomFrom(this.rng, 4, 7), 0, 100);
+          if (person.warmth < 28 || person.health < 42) {
+            person.health = clamp(person.health - randomFrom(this.rng, 6, 14), 0, 100);
+            severe += 1;
+            if (person.health <= 0) {
+              this.recordDeath(person, "hardship", { silent: true, causes: { disaster: true, snow: true } });
+              deaths += 1;
+            }
+          }
+        }
+        this.resources.energy = clamp(this.resources.energy - 6, 0, 500);
+        this.resources.food = clamp(this.resources.food - 3.5, 0, 600);
+        return deaths > 0
+          ? `폭설로 주민 ${deaths}명이 목숨을 잃고 ${Math.max(0, severe - deaths)}명이 크게 쇠약해졌습니다.`
+          : `폭설이 덮치며 주민 ${severe}명이 크게 쇠약해지고 저장 에너지와 식량이 빠르게 줄기 시작했습니다.`;
+      }
+      case "drought": {
+        let strained = 0;
+        let deaths = 0;
+        for (const person of this.getAlivePeople()) {
+          person.hunger = clamp(person.hunger + randomFrom(this.rng, 6, 11), 0, 100);
+          person.energy = clamp(person.energy - randomFrom(this.rng, 1, 4), 0, 100);
+          if (person.hunger > 74 || person.health < 45) {
+            person.health = clamp(person.health - randomFrom(this.rng, 4, 11), 0, 100);
+            strained += 1;
+            if (person.health <= 0) {
+              this.recordDeath(person, "hardship", { silent: true, causes: { disaster: true, drought: true } });
+              deaths += 1;
+            }
+          }
+        }
+        this.resources.food = clamp(this.resources.food - 8, 0, 600);
+        this.ecology.vegetation = clamp(this.ecology.vegetation - 12, 10, 100);
+        this.ecology.wildlife = clamp(this.ecology.wildlife - 7, 8, 100);
+        return deaths > 0
+          ? `가뭄이 시작되자 주민 ${deaths}명이 쓰러지고 식량과 식생이 급격히 줄었습니다.`
+          : `가뭄이 시작되며 식량과 식생이 급격히 줄고 주민 ${strained}명이 탈진했습니다.`;
+      }
+      case "landslide":
+        return this.applyLandslideImpact(disaster.durationMonths);
+      case "disease": {
+        const candidates = this.shuffleList(this.getAlivePeople());
+        const infectedCount = Math.max(1, Math.min(candidates.length, Math.round(candidates.length * randomFrom(this.rng, 0.25, 0.45))));
+        let deaths = 0;
+        let infected = 0;
+        for (const person of candidates.slice(0, infectedCount)) {
+          person.health = clamp(person.health - randomFrom(this.rng, 14, 30), 0, 100);
+          person.energy = clamp(person.energy - randomFrom(this.rng, 4, 8), 0, 100);
+          infected += 1;
+          if (person.health <= 0 || (person.health < 16 && this.rng() < 0.3)) {
+            this.recordDeath(person, "hardship", { silent: true, causes: { disaster: true, disease: true } });
+            deaths += 1;
+          }
+        }
+        this.resources.food = clamp(this.resources.food - 5, 0, 600);
+        return deaths > 0
+          ? `질병이 번져 주민 ${deaths}명이 사망하고 ${Math.max(0, infected - deaths)}명이 고열과 쇠약에 시달립니다.`
+          : `질병이 번져 주민 ${infected}명이 고열과 쇠약에 시달리기 시작했습니다.`;
+      }
+      default:
+        return "";
+    }
+  }
+
+  applyDisasterMonthlyEffect(disaster) {
+    switch (disaster.type) {
+      case "rain": {
+        this.ecology.vegetation = clamp(this.ecology.vegetation + 4.5, 10, 100);
+        this.ecology.wildlife = clamp(this.ecology.wildlife + 1.2, 8, 100);
+        this.resources.food = clamp(this.resources.food + (this.flags.agriculture ? 1.8 : 0.6), 0, 600);
+        this.resources.energy = clamp(this.resources.energy - 1.5, 0, 500);
+        for (const person of this.getAlivePeople()) {
+          person.warmth = clamp(person.warmth - 3, 0, 100);
+        }
+        return "";
+      }
+      case "snow": {
+        let deaths = 0;
+        let severe = 0;
+        this.resources.food = clamp(this.resources.food - 4.5, 0, 600);
+        this.resources.energy = clamp(this.resources.energy - 5, 0, 500);
+        this.ecology.vegetation = clamp(this.ecology.vegetation - 2.2, 10, 100);
+        for (const person of this.getAlivePeople()) {
+          person.warmth = clamp(person.warmth - randomFrom(this.rng, 7, 11), 0, 100);
+          person.energy = clamp(person.energy - randomFrom(this.rng, 3, 6), 0, 100);
+          if (person.warmth < 24 || person.health < 34) {
+            person.health = clamp(person.health - randomFrom(this.rng, 6, 13), 0, 100);
+            severe += 1;
+            if (person.health <= 0 || (person.health < 10 && this.rng() < 0.4)) {
+              this.recordDeath(person, "hardship", { silent: true, causes: { disaster: true, snow: true } });
+              deaths += 1;
+            }
+          }
+        }
+        if (deaths > 0) return `폭설이 이어지며 주민 ${deaths}명이 추가로 숨지고 ${Math.max(0, severe - deaths)}명이 더 쇠약해졌습니다.`;
+        return severe >= 2 ? `폭설이 이어지며 주민 ${severe}명이 더 약해지고 저장 식량이 줄었습니다.` : "";
+      }
+      case "drought": {
+        let deaths = 0;
+        let severe = 0;
+        this.resources.food = clamp(this.resources.food - 4.8, 0, 600);
+        this.ecology.vegetation = clamp(this.ecology.vegetation - 8.5, 10, 100);
+        this.ecology.wildlife = clamp(this.ecology.wildlife - 4.5, 8, 100);
+        for (const person of this.getAlivePeople()) {
+          person.hunger = clamp(person.hunger + randomFrom(this.rng, 8, 12), 0, 100);
+          if (person.hunger > 76 || person.health < 42) {
+            person.health = clamp(person.health - randomFrom(this.rng, 6, 14), 0, 100);
+            severe += 1;
+            if (person.health <= 0 || (person.health < 12 && this.rng() < 0.35)) {
+              this.recordDeath(person, "hardship", { silent: true, causes: { disaster: true, drought: true } });
+              deaths += 1;
+            }
+          }
+        }
+        if (deaths > 0) return `가뭄이 이어지며 주민 ${deaths}명이 더 쓰러지고 식생이 바싹 말랐습니다.`;
+        return severe >= 2 ? `가뭄이 이어지며 주민 ${severe}명이 굶주림과 탈진에 시달립니다.` : "";
+      }
+      case "landslide": {
+        this.resources.stone = clamp(this.resources.stone - 1.4, 0, 500);
+        this.resources.food = clamp(this.resources.food - 1.2, 0, 600);
+        this.ecology.pollution = clamp(this.ecology.pollution + 1.4, 0, 100);
+        this.ecology.vegetation = clamp(this.ecology.vegetation - 2.5, 10, 100);
+        return "";
+      }
+      case "disease": {
+        const candidates = this.shuffleList(this.getAlivePeople());
+        const infectedCount = Math.max(1, Math.min(candidates.length, Math.round(candidates.length * randomFrom(this.rng, 0.18, 0.34))));
+        let deaths = 0;
+        let infected = 0;
+        this.resources.food = clamp(this.resources.food - 2.5, 0, 600);
+        for (const person of candidates.slice(0, infectedCount)) {
+          person.health = clamp(person.health - randomFrom(this.rng, 8, 18), 0, 100);
+          person.energy = clamp(person.energy - randomFrom(this.rng, 2, 6), 0, 100);
+          infected += 1;
+          if (person.health <= 0 || (person.health < 10 && this.rng() < 0.35)) {
+            this.recordDeath(person, "hardship", { silent: true, causes: { disaster: true, disease: true } });
+            deaths += 1;
+          }
+        }
+        if (deaths > 0) return `질병이 번지며 주민 ${deaths}명이 추가로 사망했고 ${Math.max(0, infected - deaths)}명이 계속 앓고 있습니다.`;
+        return infected >= 2 ? `질병이 계속 퍼지며 주민 ${infected}명이 회복하지 못하고 있습니다.` : "";
+      }
+      default:
+        return "";
+    }
+  }
+
+  applyLandslideImpact(durationMonths) {
+    const scar = this.spawnLandslideScar(durationMonths);
+    const impactRadius = scar.radius + 26;
+    let deaths = 0;
+    let injured = 0;
+    let collapsed = 0;
+    let damaged = 0;
+    let lostSites = 0;
+    for (const person of this.getAlivePeople()) {
+      const currentDist = Math.hypot(person.x - scar.x, person.y - scar.y);
+      if (currentDist > impactRadius) continue;
+      const severity = clamp(1 - currentDist / impactRadius, 0.12, 1);
+      const lethalChance = 0.12 + severity * 0.48;
+      if (this.rng() < lethalChance) {
+        this.recordDeath(person, "landslide", { silent: true, causes: { disaster: true, landslide: true } });
+        deaths += 1;
+        continue;
+      }
+      person.health = clamp(person.health - randomFrom(this.rng, 18, 42) * severity, 0, 100);
+      person.energy = clamp(person.energy - randomFrom(this.rng, 8, 20) * severity, 0, 100);
+      if (person.health <= 0) {
+        this.recordDeath(person, "landslide", { silent: true, causes: { disaster: true, landslide: true } });
+        deaths += 1;
+      } else {
+        injured += 1;
+      }
+    }
+    for (const structure of this.structures) {
+      if (!this.isStructureOperational(structure)) continue;
+      const currentDist = Math.hypot(structure.x - scar.x, structure.y - scar.y);
+      if (currentDist > scar.radius + 24) continue;
+      const severity = clamp(1 - currentDist / (scar.radius + 24), 0.18, 1);
+      const collapseChance = clamp(0.3 + severity * 0.55 + (["quarry", "tower", "factory", "powerplant", "warehouse"].includes(structure.kind) ? 0.12 : 0), 0.3, 0.96);
+      if (this.rng() < collapseChance) {
+        if (this.collapseStructure(structure, "landslide")) collapsed += 1;
+      } else {
+        structure.meta = { ...structure.meta, damaged: true, damagedBy: "landslide" };
+        damaged += 1;
+      }
+    }
+    for (const site of [...this.constructionSites]) {
+      const currentDist = Math.hypot(site.x - scar.x, site.y - scar.y);
+      if (currentDist <= scar.radius + 20 && this.removeConstructionSite(site)) lostSites += 1;
+    }
+    for (const animal of [...this.animals]) {
+      const currentDist = Math.hypot(animal.x - scar.x, animal.y - scar.y);
+      if (currentDist <= scar.radius + 16) {
+        if (!animal.domestic && this.rng() < 0.18) this.removeAnimal(animal);
+        else animal.escape = 2.2;
+      }
+    }
+    return `산사태로 주민 ${deaths}명이 사망하고 ${injured}명이 중상을 입었으며 건물 ${collapsed}채가 붕괴${damaged > 0 ? `, ${damaged}채가 손상` : ""}${lostSites > 0 ? `, 공사 ${lostSites}곳이 유실` : ""}되었습니다.`;
+  }
+
+  updateDisasterClimate(activeTypes) {
+    const updatePressure = (key, active, gain, decay, max = 36) => {
+      this.disasterClimate[key] = clamp(this.disasterClimate[key] + (active ? gain : -decay), 0, max);
+    };
+    updatePressure("rainPressure", activeTypes.has("rain"), 1.3, 0.18);
+    updatePressure("droughtPressure", activeTypes.has("drought"), 1.15, 0.12);
+    updatePressure("snowPressure", activeTypes.has("snow"), 1.05, 0.16, 24);
+    updatePressure("diseasePressure", activeTypes.has("disease"), 1.0, 0.22, 24);
+  }
+
+  resolveDisasterChainEvents() {
+    if (this.disasterClimate.rainPressure >= 11.5 && !this.hasDisaster("landslide")) {
+      const triggered = this.triggerDisaster("landslide", {
+        leadMessage: "긴 비로 지반이 약해져",
+        durationMonths: Math.max(3, this.getRandomDisasterDurationMonths() - 1)
+      });
+      if (triggered) {
+        this.disasterClimate.rainPressure = Math.max(4, this.disasterClimate.rainPressure - 8);
+        return true;
+      }
+    }
+    if (this.disasterClimate.rainPressure >= 16 && !this.hasDisaster("disease")) {
+      const triggered = this.triggerDisaster("disease", {
+        leadMessage: "습한 공기와 고인 물이 누적되어",
+        durationMonths: Math.max(2, this.getRandomDisasterDurationMonths() - 2)
+      });
+      if (triggered) {
+        this.disasterClimate.rainPressure = Math.max(6, this.disasterClimate.rainPressure - 6);
+        this.disasterClimate.diseasePressure += 2;
+        return true;
+      }
+    }
+    if (this.disasterClimate.droughtPressure >= 10 && !this.hasDisaster("disease")) {
+      const triggered = this.triggerDisaster("disease", {
+        leadMessage: "메마른 우물과 오염된 물이 이어져",
+        durationMonths: Math.max(2, this.getRandomDisasterDurationMonths() - 3)
+      });
+      if (triggered) {
+        this.disasterClimate.droughtPressure = Math.max(4, this.disasterClimate.droughtPressure - 5);
+        this.disasterClimate.diseasePressure += 1.5;
+        return true;
+      }
+    }
+    if (this.disasterClimate.snowPressure >= 9 && this.resources.food < 44 && !this.hasDisaster("disease")) {
+      const triggered = this.triggerDisaster("disease", {
+        leadMessage: "긴 한파와 식량 부족이 겹치며",
+        durationMonths: Math.max(2, this.getRandomDisasterDurationMonths() - 4)
+      });
+      if (triggered) {
+        this.disasterClimate.snowPressure = Math.max(3, this.disasterClimate.snowPressure - 4);
+        return true;
+      }
+    }
+    return false;
   }
 
   resurrectDinosaurs() {
@@ -1018,36 +1391,59 @@ class CivilizationSim {
     this.log(`복원된 공룡 ${removed}마리가 다시 멸종하며 생태계가 안정을 되찾습니다.`);
   }
 
-  spawnLandslideScar() {
-    const scar = { x: randomFrom(this.rng, 690, 860), y: randomFrom(this.rng, 170, 360), radius: randomFrom(this.rng, 36, 64), remaining: 14 };
+  spawnLandslideScar(durationMonths = 6) {
+    const preferredAnchors = [
+      ...this.getOperationalStructures().filter((structure) => structure.x > 520),
+      ...this.getAlivePeople().filter((person) => person.x > 500)
+    ];
+    const fallbackAnchors = [...this.getOperationalStructures(), ...this.getAlivePeople()];
+    const anchors = preferredAnchors.length ? preferredAnchors : fallbackAnchors;
+    const anchor = anchors.length ? anchors[Math.floor(this.rng() * anchors.length)] : null;
+    const scar = {
+      x: anchor ? clamp(anchor.x + randomFrom(this.rng, -46, 46), 140, 860) : randomFrom(this.rng, 200, 860),
+      y: anchor ? clamp(anchor.y + randomFrom(this.rng, -42, 42), 150, 430) : randomFrom(this.rng, 170, 430),
+      radius: randomFrom(this.rng, 44, 76),
+      remainingMonths: Math.min(durationMonths, 6)
+    };
     this.landslideScars.push(scar);
-    for (const structure of this.structures) {
-      if (Math.hypot(structure.x - scar.x, structure.y - scar.y) < scar.radius + 20 && ["quarry", "tower", "factory", "powerplant"].includes(structure.kind)) {
-        structure.meta.damaged = true;
-      }
-    }
     for (const animal of this.animals) {
       if (Math.hypot(animal.x - scar.x, animal.y - scar.y) < scar.radius + 20) animal.escape = 1.5;
     }
+    return scar;
   }
 
   hasDisaster(type) {
-    return this.activeDisasters.some((disaster) => disaster.type === type);
+    return Boolean(this.getActiveDisaster(type));
   }
 
-  updateDisasters(scaledDt) {
-    this.activeDisasters = this.activeDisasters.filter((disaster) => {
-      disaster.remaining -= scaledDt * 0.05;
-      return disaster.remaining > 0;
-    });
+  updateDisasters(yearDelta) {
+    const monthDelta = yearDelta * MONTHS_PER_YEAR;
+    const ended = [];
+    this.disasterTickProgress += monthDelta;
+    while (this.disasterTickProgress >= 1) {
+      this.disasterTickProgress -= 1;
+      const activeTypes = new Set(this.activeDisasters.map((disaster) => disaster.type));
+      for (const disaster of this.activeDisasters) {
+        if (disaster.remainingMonths <= 0) continue;
+        const message = this.applyDisasterMonthlyEffect(disaster);
+        disaster.remainingMonths -= 1;
+        if (message) this.log(message);
+        if (disaster.remainingMonths <= 0) ended.push(disaster);
+      }
+      this.updateDisasterClimate(activeTypes);
+      this.resolveDisasterChainEvents();
+    }
+    this.activeDisasters = this.activeDisasters.filter((disaster) => disaster.remainingMonths > 0);
+    if (ended.length) {
+      const uniqueEnded = ended.filter((disaster, index) => ended.findIndex((candidate) => candidate.type === disaster.type && candidate.startedAtMonth === disaster.startedAtMonth) === index);
+      for (const disaster of uniqueEnded) {
+        this.log(`${disasterConfigs[disaster.type].label} 재해가 끝나고 하늘과 땅이 조금씩 안정을 되찾습니다.`);
+      }
+    }
     this.landslideScars = this.landslideScars.filter((scar) => {
-      scar.remaining -= scaledDt * 0.07;
-      return scar.remaining > 0;
+      scar.remainingMonths -= monthDelta;
+      return scar.remainingMonths > 0;
     });
-    if (this.hasDisaster("drought")) this.ecology.vegetation -= scaledDt * 0.14;
-    if (this.hasDisaster("rain")) this.ecology.vegetation += scaledDt * 0.08;
-    if (this.hasDisaster("snow")) this.resources.energy -= scaledDt * 0.02;
-    if (this.hasDisaster("disease")) this.resources.food -= scaledDt * 0.015;
   }
 
   updatePlants(scaledDt) {
@@ -1659,7 +2055,7 @@ class CivilizationSim {
     let best = null;
     let bestDistance = Infinity;
     for (const structure of this.structures) {
-      if (!kinds.includes(structure.kind)) continue;
+      if (!kinds.includes(structure.kind) || !this.isStructureOperational(structure)) continue;
       const current = dist(person, structure);
       if (current < bestDistance) {
         bestDistance = current;
@@ -1841,6 +2237,8 @@ class CivilizationSim {
     }, {});
     const items = [];
     if (this.hasDinosaurs()) items.push(`복원된 공룡 ${this.countDinosaurs()}마리가 평원을 배회하며 사람과 동물 수를 압박하고 있습니다.`);
+    if (this.disasterClimate.rainPressure >= 10 && !this.hasDisaster("landslide")) items.push(`긴 비가 누적되며 지반이 약해졌습니다. 이 상태가 이어지면 산사태가 뒤따를 수 있습니다.`);
+    if (this.disasterClimate.droughtPressure >= 8 && !this.hasDisaster("disease")) items.push(`메마른 시기가 길어지며 식수 오염 위험이 커졌습니다. 질병 재해로 이어질 수 있습니다.`);
     if (this.countDinosaurs("carnivore")) items.push(`육식 공룡 ${this.countDinosaurs("carnivore")}마리가 사람과 육상 동물을 직접 사냥하고 있습니다.`);
     if (this.countDinosaurs("herbivore")) items.push(`초식 공룡 ${this.countDinosaurs("herbivore")}마리가 식생을 뜯어먹고 가까운 생물을 짓밟고 있습니다.`);
     if (this.hasDinosaurs() && (taskCounts.hunt || taskCounts.guard)) items.push(`사냥꾼과 수호자 ${Math.max(0, (taskCounts.hunt || 0) + (taskCounts.guard || 0))}명이 공룡을 포위하며 집단 반격을 시도하고 있습니다.`);
@@ -1862,6 +2260,7 @@ class CivilizationSim {
     const dinosaursActive = this.hasDinosaurs();
     ui.playPauseBtn.textContent = this.running ? "일시정지" : "다시 재생";
     ui.speedButtons.forEach((button) => button.classList.toggle("active", Number(button.dataset.speed) === this.speed));
+    ui.disasterButtons.forEach((button) => button.classList.toggle("active", this.hasDisaster(button.dataset.disaster)));
     if (ui.dinosaurToggleBtn) {
       ui.dinosaurToggleBtn.dataset.dinosaurAction = dinosaursActive ? "extinct" : "resurrect";
       ui.dinosaurToggleBtn.textContent = dinosaursActive ? "공룡 멸종" : "공룡 부활";
@@ -1873,7 +2272,7 @@ class CivilizationSim {
     ui.energy.textContent = String(Math.round(this.resources.energy));
     ui.wildlife.textContent = `${Math.round(this.ecology.wildlife)}%`;
     ui.vegetation.textContent = `${Math.round(this.ecology.vegetation)}%`;
-    ui.structures.textContent = String(this.structures.length);
+    ui.structures.textContent = String(this.getOperationalStructures().length);
     ui.era.textContent = this.getEra().name;
     ui.unlockList.innerHTML = this.getEraHighlights().map((entry) => `<li>${entry}</li>`).join("");
     ui.interactionList.innerHTML = this.getInteractionNotes().map((entry) => `<li>${entry}</li>`).join("");
@@ -1881,7 +2280,7 @@ class CivilizationSim {
     ui.focusKicker.textContent = focus.kicker;
     ui.focusTitle.textContent = focus.title;
     ui.focusDescription.textContent = focus.description;
-    const alertTags = this.activeDisasters.map((disaster) => `<span class="tag ${disaster.type}">${disasterConfigs[disaster.type].label} ${disaster.remaining.toFixed(1)}년</span>`);
+    const alertTags = this.activeDisasters.map((disaster) => `<span class="tag ${disaster.type}">${disasterConfigs[disaster.type].label} ${this.formatMonths(disaster.remainingMonths)}</span>`);
     if (this.hasDinosaurs()) alertTags.unshift(`<span class="tag dinosaur">공룡 출현 초식 ${this.countDinosaurs("herbivore")} / 육식 ${this.countDinosaurs("carnivore")}</span>`);
     if (alertTags.length === 0) ui.activeDisasters.innerHTML = `<span class="tag">평온함</span>`;
     else ui.activeDisasters.innerHTML = alertTags.join("");
@@ -2091,6 +2490,25 @@ class CivilizationSim {
       ctx.beginPath();
       ctx.ellipse(x, y + (s.kind === "telecom" ? 46 : 14), Math.max(10, (s.width || s.size || 20) * 0.28), s.kind === "telecom" ? 4 : 5, 0, 0, Math.PI * 2);
       ctx.fill();
+      if (s.meta.collapsed) {
+        ctx.fillStyle = "#675244";
+        ctx.beginPath();
+        ctx.ellipse(x, y + 10, Math.max(14, (s.width || s.size || 24) * 0.34), 9, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#3f3026";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(x - 16, y + 2);
+        ctx.lineTo(x + 18, y + 18);
+        ctx.moveTo(x - 8, y + 18);
+        ctx.lineTo(x + 10, y - 2);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(175, 84, 67, 0.32)";
+        ctx.beginPath();
+        ctx.arc(x, y + 6, 18, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
       if (s.kind === "campfire") {
         ctx.fillStyle = "rgba(255, 182, 79, 0.34)";
         ctx.beginPath();
@@ -2649,7 +3067,7 @@ class CivilizationSim {
     ctx.fillText(`${this.getDisplayYearLabel()}  |  ${this.getEra().name}  |  배속 ${this.speed}x`, 26, 38);
     ctx.fillText(`인구 ${this.getAlivePeople().length}  |  식량 ${Math.round(this.resources.food)}  |  에너지 ${Math.round(this.resources.energy)}`, 26, 60);
     ctx.fillText(`야생동물 ${Math.round(this.ecology.wildlife)}%  |  식생 ${Math.round(this.ecology.vegetation)}%  |  오염 ${Math.round(this.ecology.pollution)}%`, 26, 82);
-    ctx.fillText(`건물 ${this.structures.length}  |  차량 ${this.vehicles.length}  |  지식 ${Math.round(this.resources.knowledge)}`, 26, 104);
+    ctx.fillText(`건물 ${this.getOperationalStructures().length}  |  차량 ${this.vehicles.length}  |  지식 ${Math.round(this.resources.knowledge)}`, 26, 104);
   }
 }
 
@@ -2718,5 +3136,3 @@ window.addEventListener("keydown", async (event) => {
 sim.updateUi();
 sim.render();
 requestAnimationFrame(frameLoop);
-
-
