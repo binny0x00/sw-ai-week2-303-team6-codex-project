@@ -2,14 +2,14 @@
 const ctx = canvas.getContext("2d");
 
 const ERA_DEFS = [
-  { name: "원시 시대", threshold: 0, yearGate: 0, summary: "채집과 사냥으로 생존을 이어갑니다." },
-  { name: "불의 시대", threshold: 22, yearGate: 12, summary: "공동 불씨가 밤의 활동을 가능하게 합니다." },
-  { name: "석기 시대", threshold: 44, yearGate: 28, summary: "돌도구와 작업장이 생산성을 끌어올립니다." },
-  { name: "농경 시대", threshold: 74, yearGate: 55, summary: "밭, 곡물창고, 가축 우리가 정착을 만듭니다." },
-  { name: "고대 도시 시대", threshold: 110, yearGate: 90, summary: "시장과 부두, 다리가 문명의 흐름을 넓힙니다." },
-  { name: "중세 왕국 시대", threshold: 150, yearGate: 135, summary: "풍차, 성벽, 장인 문화가 도시를 다듬습니다." },
-  { name: "산업 혁명 시대", threshold: 195, yearGate: 185, summary: "공장과 철도가 세상을 빠르게 연결합니다." },
-  { name: "현대 시대", threshold: 245, yearGate: 260, summary: "전력, 병원, 학교, 도로와 네트워크가 완성됩니다." }
+  { name: "원시 시대", threshold: 0, yearGate: 0, summary: "채집과 사냥으로 생존을 이어갑니다.", lifeExpectancy: 23, birthRate: 0.018 },
+  { name: "불의 시대", threshold: 22, yearGate: 12, summary: "공동 불씨가 밤의 활동을 가능하게 합니다.", lifeExpectancy: 27, birthRate: 0.019 },
+  { name: "석기 시대", threshold: 44, yearGate: 28, summary: "돌도구와 작업장이 생산성을 끌어올립니다.", lifeExpectancy: 31, birthRate: 0.0205 },
+  { name: "농경 시대", threshold: 74, yearGate: 55, summary: "밭, 곡물창고, 가축 우리가 정착을 만듭니다.", lifeExpectancy: 39, birthRate: 0.024 },
+  { name: "고대 도시 시대", threshold: 110, yearGate: 90, summary: "시장과 부두, 다리가 문명의 흐름을 넓힙니다.", lifeExpectancy: 47, birthRate: 0.021 },
+  { name: "중세 왕국 시대", threshold: 150, yearGate: 135, summary: "풍차, 성벽, 장인 문화가 도시를 다듬습니다.", lifeExpectancy: 56, birthRate: 0.0175 },
+  { name: "산업 혁명 시대", threshold: 195, yearGate: 185, summary: "공장과 철도가 세상을 빠르게 연결합니다.", lifeExpectancy: 65, birthRate: 0.0145 },
+  { name: "현대 시대", threshold: 245, yearGate: 260, summary: "전력, 병원, 학교, 도로와 네트워크가 완성됩니다.", lifeExpectancy: 73, birthRate: 0.0125 }
 ];
 
 const ROLE_META = {
@@ -80,7 +80,7 @@ const ui = {
   speedButtons: [...document.querySelectorAll(".speed")],
   disasterButtons: [...document.querySelectorAll(".disaster")],
   population: document.getElementById("statPopulation"),
-  health: document.getElementById("statHealth"),
+  lifeExpectancy: document.getElementById("statLifeExpectancy"),
   food: document.getElementById("statFood"),
   energy: document.getElementById("statEnergy"),
   wildlife: document.getElementById("statWildlife"),
@@ -187,7 +187,7 @@ class CivilizationSim {
     };
     this.resources = { food: 58, wood: 26, stone: 8, metal: 0, energy: 8, knowledge: 6 };
     this.ecology = { vegetation: 82, wildlife: 76, pollution: 4 };
-    this.people = this.createPopulation(24);
+    this.people = this.createPopulation(24, { ageMin: 8, ageMax: 24 });
     this.plants = this.createPlants();
     this.animals = this.createAnimals();
     this.structures = [];
@@ -200,7 +200,17 @@ class CivilizationSim {
     this.updateUi();
   }
 
-  createPopulation(count) {
+  createPopulation(count, options = {}) {
+    const ageMin = options.ageMin ?? 14;
+    const ageMax = options.ageMax ?? 30;
+    const hungerMin = options.hungerMin ?? 18;
+    const hungerMax = options.hungerMax ?? 34;
+    const energyMin = options.energyMin ?? 70;
+    const energyMax = options.energyMax ?? 92;
+    const warmthMin = options.warmthMin ?? 65;
+    const warmthMax = options.warmthMax ?? 88;
+    const healthMin = options.healthMin ?? 74;
+    const healthMax = options.healthMax ?? 96;
     const people = [];
     for (let i = 0; i < count; i += 1) {
       people.push({
@@ -215,10 +225,14 @@ class CivilizationSim {
         target: null,
         taskTimer: 0,
         taskDuration: 1.6,
-        hunger: randomFrom(this.rng, 18, 34),
-        energy: randomFrom(this.rng, 70, 92),
-        warmth: randomFrom(this.rng, 65, 88),
-        health: randomFrom(this.rng, 74, 96),
+        hunger: randomFrom(this.rng, hungerMin, hungerMax),
+        energy: randomFrom(this.rng, energyMin, energyMax),
+        warmth: randomFrom(this.rng, warmthMin, warmthMax),
+        health: randomFrom(this.rng, healthMin, healthMax),
+        age: randomFrom(this.rng, ageMin, ageMax),
+        longevityBias: randomFrom(this.rng, -4.5, 4.5),
+        resilience: randomFrom(this.rng, 0.9, 1.12),
+        lifeExpectancy: 0,
         speedFactor: randomFrom(this.rng, 0.88, 1.14),
         alive: true,
         pulse: this.rng()
@@ -294,6 +308,7 @@ class CivilizationSim {
       civilizationScore: Number(this.computeCivilizationScore().toFixed(1)),
       population: this.getAlivePeople().length,
       averageHealth: Number(this.getAverageHealth().toFixed(1)),
+      averageLifeExpectancy: Number(this.getAverageLifeExpectancy().toFixed(1)),
       resources: { ...this.resources },
       ecology: { ...this.ecology },
       activeDisasters: this.activeDisasters.map((item) => item.type),
@@ -332,6 +347,113 @@ class CivilizationSim {
 
   getAverageHealth() {
     return average(this.getAlivePeople().map((person) => person.health));
+  }
+
+  getShelterCapacity() {
+    return this.countStructures("tent") * 5 + this.countStructures("hut") * 7 + this.countStructures("hall") * 16 + this.countStructures("apartment") * 18 + this.countStructures("hospital") * 8;
+  }
+
+  getPopulationCapacity() {
+    return 18 + this.eraIndex * 4 + this.countStructures("tent") * 2 + this.countStructures("hut") * 5 + this.countStructures("granary") * 5 + this.countStructures("hall") * 12 + this.countStructures("apartment") * 18;
+  }
+
+  getDemographicContext(alive = this.getAlivePeople()) {
+    const population = Math.max(alive.length, 1);
+    const shelterCoverage = clamp(this.getShelterCapacity() / population, 0, 1.45);
+    const foodPerPerson = this.resources.food / population;
+    const foodSecurity = clamp(foodPerPerson / (this.flags.agriculture ? 10.5 : 9), 0, 1.15);
+    const sanitationIndex = clamp(
+      (this.flags.fireAge ? 0.18 : 0)
+      + this.countStructures("granary") * 0.16
+      + this.countStructures("windmill") * 0.08
+      + this.countStructures("hall") * 0.14
+      + this.countStructures("school") * 0.16
+      + this.countStructures("hospital") * 0.22
+      + this.countStructures("apartment") * 0.12
+      + this.resources.knowledge * 0.002
+      - this.ecology.pollution * 0.003
+      - (this.hasDisaster("disease") ? 0.28 : 0),
+      0,
+      1.35
+    );
+    const medics = alive.filter((person) => person.roleKey === "medic").length;
+    const medicalCoverage = clamp(
+      (this.eraIndex >= 6 ? 0.16 : 0)
+      + this.countStructures("hospital") * 0.42
+      + this.countStructures("school") * 0.08
+      + this.countStructures("library") * 0.05
+      + medics * 0.04,
+      0,
+      1.65
+    );
+    const disasterPenalty = (this.hasDisaster("disease") ? 7 : 0) + (this.hasDisaster("snow") ? 2.5 : 0) + (this.hasDisaster("drought") ? 2 : 0) + (this.hasDisaster("landslide") ? 1.5 : 0);
+    const pollutionPenalty = this.ecology.pollution * 0.05;
+    const crowding = clamp(population / Math.max(this.getPopulationCapacity(), 1), 0, 1.6);
+    const crowdingPenalty = Math.max(0, crowding - 0.92) * 9;
+    const baselineExpectancy = clamp(
+      this.getEra().lifeExpectancy
+      + (shelterCoverage - 0.5) * 5
+      + (foodSecurity - 0.45) * 4
+      + sanitationIndex * 3.5
+      + medicalCoverage * 5.5
+      - pollutionPenalty
+      - disasterPenalty
+      - crowdingPenalty,
+      18,
+      86
+    );
+    const averageHealth = this.getAverageHealth();
+    const stability = clamp(averageHealth / 100 + sanitationIndex * 0.15, 0.3, 1.15);
+    const birthRate = this.getEra().birthRate
+      * clamp(foodSecurity, 0.4, 1.25)
+      * clamp(shelterCoverage + 0.2, 0.3, 1.25)
+      * clamp(1.18 - Math.max(0, crowding - 0.95) * 1.4, 0.15, 1.1)
+      * stability
+      * (this.hasDisaster("disease") ? 0.55 : 1)
+      * (this.hasDisaster("snow") ? 0.82 : 1);
+    return {
+      averageHealth,
+      baselineExpectancy,
+      birthRate,
+      crowding,
+      disasterPenalty,
+      foodSecurity,
+      medicalCoverage,
+      pollutionPenalty,
+      sanitationIndex,
+      shelterCoverage
+    };
+  }
+
+  estimatePersonLifeExpectancy(person, demographic = this.getDemographicContext()) {
+    const healthYears = (person.health - 65) * 0.08;
+    const warmthPenalty = Math.max(0, 46 - person.warmth) * 0.06;
+    const hungerPenalty = Math.max(0, person.hunger - 58) * 0.08;
+    return clamp(demographic.baselineExpectancy + person.longevityBias + healthYears - warmthPenalty - hungerPenalty, 18, 88);
+  }
+
+  getAverageLifeExpectancy() {
+    const alive = this.getAlivePeople();
+    if (!alive.length) return 0;
+    const demographic = this.getDemographicContext(alive);
+    return average(alive.map((person) => this.estimatePersonLifeExpectancy(person, demographic)));
+  }
+
+  recordDeath(person, cause = "hardship") {
+    if (!person?.alive) return;
+    person.alive = false;
+    person.health = 0;
+    person.target = null;
+    person.taskTimer = 0;
+    if (cause === "age") {
+      this.log(`${Math.round(person.age)}세 주민 한 명이 생을 마쳤습니다.`);
+      return;
+    }
+    if (cause === "collapse") {
+      this.log("흉년과 질병, 과밀이 겹치며 취약한 주민 한 명이 더 버티지 못했습니다.");
+      return;
+    }
+    this.log("한 사람이 질병, 굶주림, 혹한, 재해를 이기지 못하고 쓰러졌습니다.");
   }
 
   countBy(list, key) {
@@ -431,10 +553,11 @@ class CivilizationSim {
     if (this.focusTarget.type === "person") {
       const meta = ROLE_META[entity.roleKey] || ROLE_META.wanderer;
       const targetText = entity.target ? this.describeEntityBrief(entity.target) : "주변을 살피는 중";
+      const lifeExpectancy = Math.round(entity.lifeExpectancy || this.estimatePersonLifeExpectancy(entity));
       return {
         kicker: `${meta.label} 관찰`,
         title: `${meta.label}이(가) ${entity.taskLabel}`,
-        description: `건강 ${Math.round(entity.health)}%, 에너지 ${Math.round(entity.energy)}%, 배고픔 ${Math.round(entity.hunger)}% 상태입니다. 현재 목표는 ${targetText}입니다.`
+        description: `나이 ${Math.round(entity.age)}세, 기대 수명 ${lifeExpectancy}세, 건강 ${Math.round(entity.health)}%, 에너지 ${Math.round(entity.energy)}%, 배고픔 ${Math.round(entity.hunger)}% 상태입니다. 현재 목표는 ${targetText}입니다.`
       };
     }
     if (this.focusTarget.type === "animal") {
@@ -553,7 +676,8 @@ class CivilizationSim {
     if (!this.started && !forced) return;
     if (!this.running && !forced) return;
     const scaledDt = dt * this.speed;
-    this.timeYears += scaledDt * 0.42;
+    const yearDelta = scaledDt * 0.42;
+    this.timeYears += yearDelta;
     this.weatherPulse += scaledDt;
     this.roleRefreshCooldown -= scaledDt;
     this.updateEra();
@@ -562,9 +686,10 @@ class CivilizationSim {
     this.updateInteractionBursts(scaledDt);
     this.updatePlants(scaledDt);
     this.updateAnimals(scaledDt);
-    this.updatePeople(scaledDt);
+    this.updatePeople(scaledDt, yearDelta);
     this.updateVehicles(scaledDt);
     this.updateEconomy(scaledDt);
+    this.updateDemographics(yearDelta);
     this.updateUi();
   }
 
@@ -757,24 +882,35 @@ class CivilizationSim {
     if (this.flags.agriculture && this.countAnimals("sheep", true) < 6 && this.rng() < scaledDt * 0.003) this.animals.push(this.makeAnimal("sheep", true));
     if (this.flags.agriculture && this.countAnimals("cattle", true) < 4 && this.rng() < scaledDt * 0.002) this.animals.push(this.makeAnimal("cattle", true));
   }
-  updatePeople(scaledDt) {
+  updatePeople(scaledDt, yearDelta) {
     const rain = this.hasDisaster("rain");
     const snow = this.hasDisaster("snow");
     const disease = this.hasDisaster("disease");
+    const demographic = this.getDemographicContext();
     if (this.roleRefreshCooldown <= 0) {
       this.rebalanceRoles();
       this.roleRefreshCooldown = 18;
     }
     for (const person of this.getAlivePeople()) {
-      person.hunger = clamp(person.hunger + scaledDt * 0.018, 0, 100);
-      person.energy = clamp(person.energy - scaledDt * (snow ? 0.021 : 0.014), 0, 100);
-      person.warmth = clamp(person.warmth - scaledDt * (snow ? 0.03 : rain ? 0.018 : 0.008), 0, 100);
-      person.health = clamp(person.health - (person.hunger > 78 ? scaledDt * 0.03 : 0) - (person.warmth < 34 ? scaledDt * 0.04 : 0) - (disease ? scaledDt * 0.007 : 0), 0, 100);
+      const resilience = 2 - person.resilience;
+      person.age += yearDelta;
+      person.hunger = clamp(person.hunger + scaledDt * 0.018 * resilience, 0, 100);
+      person.energy = clamp(person.energy - scaledDt * (snow ? 0.021 : 0.014) * resilience, 0, 100);
+      person.warmth = clamp(person.warmth - scaledDt * (snow ? 0.03 : rain ? 0.018 : 0.008) * resilience, 0, 100);
+      person.health = clamp(person.health - ((person.hunger > 78 ? scaledDt * 0.03 : 0) + (person.warmth < 34 ? scaledDt * 0.04 : 0) + (disease ? scaledDt * 0.007 : 0)) * resilience, 0, 100);
+      person.lifeExpectancy = this.estimatePersonLifeExpectancy(person, demographic);
+      const lateLifeYears = person.age - (person.lifeExpectancy - 5);
+      if (lateLifeYears > 0) {
+        person.health = clamp(person.health - yearDelta * (0.35 + lateLifeYears * 0.22) / person.resilience, 0, 100);
+      }
+      if (person.age > person.lifeExpectancy + 2 && this.rng() < yearDelta * (0.02 + (person.age - person.lifeExpectancy - 2) * 0.018) / person.resilience) {
+        this.recordDeath(person, "age");
+        continue;
+      }
       if (!person.target || person.taskTimer === 0) this.assignTask(person);
       this.moveAndAct(person, scaledDt);
       if (person.health <= 0) {
-        person.alive = false;
-        this.log("한 사람이 질병, 굶주림, 혹한, 재해를 이기지 못하고 쓰러졌습니다.");
+        this.recordDeath(person, "hardship");
       }
     }
   }
@@ -1167,7 +1303,6 @@ class CivilizationSim {
 
   updateEconomy(scaledDt) {
     const alive = this.getAlivePeople();
-    const averageHealth = this.getAverageHealth();
     this.resources.food -= alive.length * scaledDt * 0.012;
     if (this.flags.fireAge) this.resources.wood -= this.countStructures("campfire") * scaledDt * 0.003;
     if (this.eraIndex >= 6) this.resources.energy -= scaledDt * (alive.length * 0.002 + this.countStructures("factory") * 0.01 + this.countStructures("apartment") * 0.008);
@@ -1181,16 +1316,6 @@ class CivilizationSim {
     const wildlifeScore = this.animals.length * 3.3 + this.countAnimals("deer") * 2 + this.countAnimals("bird") * 1.2 + this.countDomesticAnimals() * 0.6;
     this.ecology.vegetation = clamp(plantScore - this.ecology.pollution * 0.7, 10, 100);
     this.ecology.wildlife = clamp(wildlifeScore - this.ecology.pollution * 0.45, 8, 100);
-    const capacity = 24 + this.eraIndex * 6 + this.countStructures("hut") * 2 + this.countStructures("hall") * 4 + this.countStructures("apartment") * 10;
-    if (alive.length < capacity && this.resources.food > alive.length * 1.6 && averageHealth > 68 && this.rng() < scaledDt * 0.0025) {
-      this.people.push(this.createPopulation(1)[0]);
-      this.rebalanceRoles();
-      this.log("식량과 안정 덕분에 새로운 세대가 문명에 합류합니다.");
-    }
-    if (averageHealth < 28 && this.rng() < scaledDt * 0.0012 && alive.length > 10) {
-      const victim = alive[Math.floor(this.rng() * alive.length)];
-      victim.health = 0;
-    }
     this.resources.food = clamp(this.resources.food, 0, 600);
     this.resources.wood = clamp(this.resources.wood, 0, 500);
     this.resources.stone = clamp(this.resources.stone, 0, 500);
@@ -1200,9 +1325,46 @@ class CivilizationSim {
     this.ecology.pollution = clamp(this.ecology.pollution, 0, 100);
   }
 
+  updateDemographics(yearDelta) {
+    const alive = this.getAlivePeople();
+    if (!alive.length) return;
+    const demographic = this.getDemographicContext(alive);
+    const capacityRoom = Math.max(0, this.getPopulationCapacity() - alive.length);
+    const expectedNewAdults = Math.min(capacityRoom, alive.length * demographic.birthRate * yearDelta);
+    let entrants = Math.floor(expectedNewAdults);
+    if (this.rng() < expectedNewAdults - entrants) entrants += 1;
+    if (entrants > 0) {
+      const newcomers = this.createPopulation(entrants, {
+        ageMin: 14,
+        ageMax: 18,
+        healthMin: 78,
+        healthMax: 97,
+        hungerMin: 12,
+        hungerMax: 24,
+        energyMin: 78,
+        energyMax: 96,
+        warmthMin: 72,
+        warmthMax: 92
+      });
+      this.people.push(...newcomers);
+      this.rebalanceRoles();
+      this.log(`정착과 양육 여건이 나아지며 새 세대 ${entrants}명이 성인이 되어 공동체에 합류합니다.`);
+    }
+    const collapsePressure = Math.max(0, 0.34 - demographic.foodSecurity) + Math.max(0, demographic.crowding - 1) * 0.7 + demographic.disasterPenalty / 24;
+    if (alive.length > 8 && collapsePressure > 0.18 && this.rng() < yearDelta * collapsePressure * 0.1) {
+      const vulnerable = [...alive].sort((left, right) => (right.age - right.lifeExpectancy) - (left.age - left.lifeExpectancy) || left.health - right.health)[0];
+      if (vulnerable) this.recordDeath(vulnerable, "collapse");
+    }
+  }
+
   getEraHighlights() {
     const era = this.getEra();
-    const items = [`${era.name}: ${era.summary}`, `지식 ${Math.round(this.resources.knowledge)}, 에너지 ${Math.round(this.resources.energy)}, 오염 ${Math.round(this.ecology.pollution)} 수준입니다.`];
+    const demographic = this.getDemographicContext();
+    const items = [
+      `${era.name}: ${era.summary}`,
+      `평균 기대 수명 ${Math.round(this.getAverageLifeExpectancy())}세, 주거 안정 ${Math.round(demographic.shelterCoverage * 100)}%, 위생 ${Math.round(demographic.sanitationIndex * 100)}% 수준입니다.`,
+      `지식 ${Math.round(this.resources.knowledge)}, 에너지 ${Math.round(this.resources.energy)}, 오염 ${Math.round(this.ecology.pollution)} 수준입니다.`
+    ];
     if (this.flags.agriculture) items.push(`농경지 ${this.countPlants("crop")}곳, 과수원 ${this.countPlants("orchard")}곳, 가축 ${this.countDomesticAnimals()}마리가 문명을 지탱합니다.`);
     if (this.flags.cityAge) items.push(`시장 ${this.countStructures("market")}곳, 부두 ${this.countStructures("dock")}곳, 배 ${this.countVehicles("boat")}척이 물자 흐름을 만듭니다.`);
     if (this.flags.industryAge) items.push(`공장 ${this.countStructures("factory")}곳, 철도 ${this.countVehicles("train")}량, 금속 ${Math.round(this.resources.metal)} 단위가 산업 구조를 키웁니다.`);
@@ -1235,7 +1397,7 @@ class CivilizationSim {
     ui.playPauseBtn.textContent = this.running ? "일시정지" : "다시 재생";
     ui.speedButtons.forEach((button) => button.classList.toggle("active", Number(button.dataset.speed) === this.speed));
     ui.population.textContent = String(alive.length);
-    ui.health.textContent = `${Math.round(this.getAverageHealth())}%`;
+    ui.lifeExpectancy.textContent = `${Math.round(this.getAverageLifeExpectancy())}세`;
     ui.food.textContent = String(Math.round(this.resources.food));
     ui.energy.textContent = String(Math.round(this.resources.energy));
     ui.wildlife.textContent = `${Math.round(this.ecology.wildlife)}%`;
@@ -2014,4 +2176,3 @@ window.addEventListener("keydown", async (event) => {
 sim.updateUi();
 sim.render();
 requestAnimationFrame(frameLoop);
-
