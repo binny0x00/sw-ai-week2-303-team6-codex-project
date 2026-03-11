@@ -1,0 +1,5 @@
+node_modules/
+output/
+server.out.log
+server.err.log
+.vercel

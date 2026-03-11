@@ -1,0 +1,14 @@
+{
+  "name": "civilization-sim-demo",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.58.2",
+    "vercel": "^50.31.1"
+  }
+}

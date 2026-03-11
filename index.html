@@ -1,0 +1,108 @@
+﻿<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>문명 진화 디오라마</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="eyebrow">문명의 장기 관찰 시뮬레이션</span>
+          <h1>문명 진화 디오라마</h1>
+        </div>
+        <div class="controls">
+          <button id="playPauseBtn" class="control-button">일시정지</button>
+          <div class="speed-group" id="speedGroup">
+            <button data-speed="1" class="control-button speed">1x</button>
+            <button data-speed="2" class="control-button speed active">2x</button>
+            <button data-speed="4" class="control-button speed">4x</button>
+            <button data-speed="8" class="control-button speed">8x</button>
+            <button data-speed="16" class="control-button speed">16x</button>
+          </div>
+          <div class="disaster-group">
+            <button data-disaster="rain" class="control-button disaster">비</button>
+            <button data-disaster="snow" class="control-button disaster">눈</button>
+            <button data-disaster="drought" class="control-button disaster">가뭄</button>
+            <button data-disaster="landslide" class="control-button disaster">산사태</button>
+            <button data-disaster="disease" class="control-button disaster">질병</button>
+          </div>
+          <button id="restartBtn" class="control-button ghost">다시 시작</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="canvas-panel">
+          <canvas id="worldCanvas" width="960" height="580"></canvas>
+          <div id="startOverlay" class="start-overlay">
+            <div class="overlay-card">
+              <p class="eyebrow">원시 시대에서 현대 도시까지</p>
+              <h2>인간, 동물, 식물이 함께 진화하는 세계</h2>
+              <p>
+                사람들은 스스로 모여 불을 지피고, 사냥하고, 농사를 짓고,
+                공장을 세우고, 마침내 현대 도시를 만듭니다. 시간을 가속하고 재해를 내려
+                문명과 생태계가 어떻게 서로를 바꾸는지 지켜보세요.
+              </p>
+              <button id="startBtn" class="start-button">시뮬레이션 시작</button>
+            </div>
+          </div>
+          <div class="canvas-footer">
+            <div class="legend-strip">
+              <span class="legend-chip people">사람</span>
+              <span class="legend-chip plants">식물</span>
+              <span class="legend-chip animals">동물</span>
+              <span class="legend-chip structures">건물</span>
+              <span class="legend-chip routes">상호작용</span>
+              <span class="legend-chip signals">행동 신호</span>
+            </div>
+            <div class="focus-card" id="focusCard">
+              <span id="focusKicker" class="eyebrow">관찰 가이드</span>
+              <h3 id="focusTitle">캔버스를 클릭해 인물, 동식물, 건물을 확인하세요</h3>
+              <p id="focusDescription">선택한 대상의 역할, 상태, 주변 상호작용을 바로 읽을 수 있습니다.</p>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side-panel">
+          <section class="panel-block">
+            <h2>문명 현황</h2>
+            <div class="stat-grid">
+              <div><span>인구</span><strong id="statPopulation">0</strong></div>
+              <div><span>평균 건강</span><strong id="statHealth">0</strong></div>
+              <div><span>저장 식량</span><strong id="statFood">0</strong></div>
+              <div><span>에너지</span><strong id="statEnergy">0</strong></div>
+              <div><span>야생동물</span><strong id="statWildlife">0</strong></div>
+              <div><span>식생도</span><strong id="statVegetation">0</strong></div>
+              <div><span>건물 수</span><strong id="statStructures">0</strong></div>
+              <div><span>시대</span><strong id="statEra">-</strong></div>
+            </div>
+          </section>
+
+          <section class="panel-block">
+            <h2>문명 특징</h2>
+            <ul id="unlockList" class="unlock-list"></ul>
+          </section>
+
+          <section class="panel-block">
+            <h2>생태 상호작용</h2>
+            <ul id="interactionList" class="unlock-list"></ul>
+          </section>
+
+          <section class="panel-block">
+            <h2>활성 재해</h2>
+            <div id="activeDisasters" class="tag-list"></div>
+          </section>
+
+          <section class="panel-block">
+            <h2>최근 사건</h2>
+            <ul id="eventLog" class="event-log"></ul>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
