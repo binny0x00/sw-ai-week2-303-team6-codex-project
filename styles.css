@@ -56,7 +56,8 @@ button {
 
 .controls,
 .speed-group,
-.disaster-group {
+.disaster-group,
+.dinosaur-group {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -152,6 +153,14 @@ canvas {
 
 .control-button.active {
   background: linear-gradient(180deg, #fff1ca 0%, #ffcf7d 100%);
+}
+
+.control-button.dinosaur-action {
+  background: linear-gradient(180deg, #f4e7bb 0%, #b8d08b 100%);
+}
+
+.control-button.dinosaur-action.ghost {
+  background: linear-gradient(180deg, #c49a73 0%, #9d7756 100%);
 }
 
 .side-panel {
@@ -331,6 +340,10 @@ canvas {
   background: rgba(207, 110, 79, 0.22);
 }
 
+.tag.dinosaur {
+  background: rgba(140, 173, 104, 0.24);
+}
+
 @media (max-width: 1160px) {
   .content {
     grid-template-columns: 1fr;
@@ -358,4 +371,3 @@ canvas {
     padding: 24px;
   }
 }
-
