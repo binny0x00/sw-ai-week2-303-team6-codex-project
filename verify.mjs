@@ -40,7 +40,7 @@ try {
   fs.writeFileSync(path.join(outDir, "state-0.json"), JSON.stringify(initialState, null, 2));
   await page.screenshot({ path: path.join(outDir, "shot-0.png"), fullPage: true });
 
-  assert(initialState.population === 8, `expected initial population 8, got ${initialState.population}`);
+  assert(initialState.population === 16, `expected initial population 16, got ${initialState.population}`);
   assert(!initialState.structuresByKind.campfire, "campfire should not exist at initial start");
   assert(initialState.activeDisasters.length === 0, "no disasters should be active at start");
 
