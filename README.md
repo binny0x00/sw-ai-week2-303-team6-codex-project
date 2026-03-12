@@ -2,6 +2,10 @@
 
 An observation-first 2D civilization simulation that starts with a primitive tribe and lets fire, stone tools, fishing, cooperation, and shelters emerge over time.
 
+["문명 진화 디오라마" 바로가기](https://skill-deploy-slphgdhve9-codex-agent-deploys.vercel.app/)
+<img width="450" height="450" alt="image" src="https://github.com/user-attachments/assets/2c8639a4-a06d-4e0c-a29e-29797f622d93" />
+
+
 ## 프로젝트 설명
 
 이 프로젝트는 작은 부족이 자연환경 속에서 살아남으며 문명을 만들어 가는 과정을 실시간으로 보여주는 2D 시뮬레이션입니다. 시작은 아주 단순합니다. 몇 명의 주민이 배고픔, 추위, 체력, 에너지를 관리하며 채집과 사냥으로 버티고, 시간이 지나면 불을 발견하고, 돌도구를 만들고, 농경과 정착을 시작하면서 사회가 점점 복잡해집니다. 이후에는 시장, 다리, 부두, 공장, 병원, 학교 같은 시설이 생기고, 시대가 원시 시대에서 현대 시대로 넘어가면서 인구 구조와 생활 방식도 함께 달라집니다.
