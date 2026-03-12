@@ -8,7 +8,7 @@ An observation-first 2D civilization simulation that starts with a primitive tri
 
 이 프로젝트의 핵심은 단순히 건물을 누르면 성장하는 게임이 아니라, 주민들이 스스로 판단하고 움직인다는 점입니다. 주민은 상황에 따라 사냥꾼, 경비병, 농부, 어부, 의무병 같은 역할을 맡고, 기대 수명과 건강 상태, 재해, 식량 사정, 동물과 공룡의 위협에 따라 공동체 전체의 인구가 실제로 늘거나 줄어듭니다. 비, 눈, 가뭄, 질병, 산사태 같은 재해는 월 단위로 작동하고, 최근에는 다리를 실제 통로로 인식해서 강을 건너도록 이동 로직도 개선했습니다. 즉 이 프로젝트는 문명의 발전을 '건설'보다 '생태계와 인간 행동의 상호작용'으로 보여주는 시뮬레이션이라고 설명할 수 있습니다.
 
-## 발표용 아키텍처 설명
+## 아키텍처 설명
 
 - `index.html` + `styles.css`
   - 사용자 입력, HUD, 버튼, 캔버스 UI를 담당하는 프론트엔드 레이어입니다.
@@ -27,7 +27,10 @@ An observation-first 2D civilization simulation that starts with a primitive tri
 
 ## 우리 협업 방식과 GitHub 흐름
 
-이번 프로젝트는 기능 단위로 짧게 반복하는 방식으로 협업했습니다.
+- Top-Down
+  <img width="1568" height="716" alt="image" src="https://github.com/user-attachments/assets/d1aa7d2f-a6a8-4fa0-bb33-285761517aeb" />
+
+- 기능 단위로 짧게 반복하는 방식
 
 1. 사람이 기능이나 버그 수정 요구를 주면 Codex가 현재 코드와 상태를 먼저 분석합니다.
 2. Codex가 로컬에서 구현하고, 필요하면 테스트와 실행 확인까지 마칩니다.
